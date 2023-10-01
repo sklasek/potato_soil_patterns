@@ -1,0 +1,127 @@
+---
+title: "Soil data and how it varies across sites"
+author: "Scott Klasek"
+date: "2022-12-19"
+output: github_document
+---
+#### purpose
+To see how different soil data varies across states and develop hypotheses about how it could be driving trends in microbiomes across sites.  
+
+#### load libraries
+```{r}
+library(tidyverse)
+# library(soiltexture)
+library(ggtern)
+library(patchwork)
+```
+
+#### load and combine data
+```{r}
+soil <- read.csv(file = "/Users/klas0061/Desktop/UMN/jim_info/soil_characteristics_jim_2023_06_13.csv", na.strings = c(".")) # convert . to NA
+table(soil$State) # no USDA ME2 site
+
+larkin.data <- read.csv(file = "/Users/klas0061/Desktop/UMN/larkin_info/chem_data_first_two_years.csv") # ME2 data that I could find (this csv was manually curated)
+
+soil <- bind_rows(soil, larkin.data) # bind in ME2 data with the rest of the site data
+```
+
+#### plotting edaphic factors that vary noticeably across sites
+Note: I tried to write these ggplots as functions, using embracing to specify each variable to plot. But it didn't work, because REASONS. 
+```{r}
+cols.alphabetical.east.west <- c("#DC4405", "#B3A369", "#236192", "#7A0019", "#FFC72A", "#C5050C", "#18453B", "#B0D7FF", "gray") # color scale
+
+# plotting pH in samples from the first two years
+ggph <- ggplot(soil %>% filter(Year < 21), aes(State, pH, color = factor(State, levels = c("OR", "ID", "CO", "MN", "ND", "WI", "MI", "ME", "US"), labels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2"))))+
+  geom_jitter()+
+  scale_color_manual("Site", values = cols.alphabetical.east.west)+
+  scale_x_discrete("", limits = c("OR", "ID", "CO", "MN", "ND", "WI", "MI", "ME", "US"), labels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2"))+
+  theme_bw()+ggtitle("A")+theme(legend.position = "none")
+
+# plotting organic matter and C in samples from the first two years
+ggom <- ggplot(soil %>% filter(Year < 21), aes(State, OM...., color = factor(State, levels = c("OR", "ID", "CO", "MN", "ND", "WI", "MI", "ME", "US"), labels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2"))))+
+  geom_jitter()+
+  scale_color_manual("Site", values = cols.alphabetical.east.west)+
+  scale_x_discrete("", limits = c("OR", "ID", "CO", "MN", "ND", "WI", "MI", "ME", "US"), labels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2"))+
+  theme_bw()+scale_y_continuous("% Organic matter")+ggtitle("B")+theme(legend.position = "none")
+
+ggtc <- ggplot(soil %>% filter(Year < 21), aes(State, Total.C...., color = factor(State, levels = c("OR", "ID", "CO", "MN", "ND", "WI", "MI", "ME", "US"), labels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2"))))+
+  geom_jitter()+
+  scale_color_manual("Site", values = cols.alphabetical.east.west)+
+  scale_x_discrete("", limits = c("OR", "ID", "CO", "MN", "ND", "WI", "MI", "ME", "US"), labels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2"))+
+  theme_bw()+scale_y_continuous("% total C")+ggtitle("C")+theme(legend.position = "none")
+
+# ggom + ggtc + plot_layout(guides = "collect") 
+
+# NPK
+ggn <- ggplot(soil %>% filter(Year < 21), aes(State, Nitrate.N..ppm., color = factor(State, levels = c("OR", "ID", "CO", "MN", "ND", "WI", "MI", "ME", "US"), labels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2"))))+
+  geom_jitter()+
+  scale_color_manual("Site", values = cols.alphabetical.east.west)+
+  scale_x_discrete("", limits = c("OR", "ID", "CO", "MN", "ND", "WI", "MI", "ME", "US"), labels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2"))+
+  theme_bw()+scale_y_continuous("Nitrate (ppm)")+ggtitle("D")+theme(legend.position = "none")
+
+ggp <- ggplot(soil %>% filter(Year < 21), aes(State, P.Bray..ppm., color = factor(State, levels = c("OR", "ID", "CO", "MN", "ND", "WI", "MI", "ME", "US"), labels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2"))))+
+  geom_jitter()+
+  scale_color_manual("Site", values = cols.alphabetical.east.west)+
+  scale_x_discrete("", limits = c("OR", "ID", "CO", "MN", "ND", "WI", "MI", "ME", "US"), labels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2"))+
+  theme_bw()+scale_y_continuous("P (ppm, Bray)")+ggtitle("E")+theme(legend.position = "none")
+
+ggk <- ggplot(soil %>% filter(Year < 21), aes(State, K..ppm., color = factor(State, levels = c("OR", "ID", "CO", "MN", "ND", "WI", "MI", "ME", "US"), labels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2"))))+
+  geom_jitter()+
+  scale_color_manual("Site", values = cols.alphabetical.east.west)+
+  scale_x_discrete("", limits = c("OR", "ID", "CO", "MN", "ND", "WI", "MI", "ME", "US"), labels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2"))+
+  theme_bw()+scale_y_continuous("K (ppm)")+ggtitle("F")+theme(legend.position = "none")
+
+# CEC 
+ggcec <- ggplot(soil %>% filter(Year < 21), aes(State, CEC..meq.100g., color = factor(State, levels = c("OR", "ID", "CO", "MN", "ND", "WI", "MI", "ME", "US"), labels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2"))))+
+  geom_jitter()+
+  scale_color_manual("Site", values = cols.alphabetical.east.west)+
+  scale_x_discrete("", limits = c("OR", "ID", "CO", "MN", "ND", "WI", "MI", "ME", "US"), labels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2"))+
+  theme_bw()+scale_y_continuous("Cation Exchange Capacity \n(mEq/100g)")+ggtitle("G")+theme(legend.position = "none")
+
+
+ggph + ggom + ggtc + ggn + ggp + ggk + ggcec
+```
+
+CO and ID clearly have higher pH than the rest, ME has highest OM.  
+
+Other noteworthy trends:
+
+ME is a bit of an outlier, with highest OM and total C, also high nitrate and P. 
+
+CO has high K and nitrate.  
+
+OR has high K.  
+
+MN and ND (both MN really) all have way higher total C than WI does. Microbial communities from these sites all cluster together.  
+
+
+#### Make a ternary plot of soil texture classifications   
+Help from [this resource here](https://saryace.github.io/flipbook_soiltexture_en/#37).  
+```{r}
+soil.texture <- soil %>% select(State, Sand.., Silt.., Clay..) %>% drop_na() # trim dataframe and remove NAs 
+colnames(soil.texture)[2:4] <- c("Sand", "Silt", "Clay") # clean up column names
+
+theme_set(theme_bw()) # call a theme somehow
+data(USDA) # load USDA soil classification polygon boundaries
+USDA_text <- USDA  %>% group_by(Label) %>%
+  summarise_if(is.numeric, mean, na.rm = TRUE) # 
+
+# plot with USDA classifications
+tplot <- ggplot(data = USDA, aes(y = Clay, x = Sand, z = Silt)) +
+  coord_tern(L = "x", T = "y", R = "z") +
+  geom_polygon(
+    aes(fill = Label), alpha = 0.0, size = 0.5,
+    color = "black") +
+  geom_text(data = USDA_text, aes(label = Label), color = 'black', size = 2) +
+  geom_point(data = soil.texture, aes(x = Sand, y = Clay, z = Silt, color = State, alpha = 0.2))+
+  scale_color_manual("Site", limits = c("OR", "ID", "CO", "MN", "ND", "WI", "MI", "ME", "US"), labels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2"), values = cols.alphabetical.east.west)+guides(fill="none", alpha = "none")
+tplot
+```
+
+MI has a lot of textural variability. It doesn't seem to impact fungal beta-diversity, but I wonder if this explains the high bacterial beta-diversity. 
+
+
+#### session info
+```{r}
+sessionInfo()
+```

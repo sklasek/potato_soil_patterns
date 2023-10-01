@@ -1,0 +1,82 @@
+---
+title: "table info"
+author: "Scott Klasek"
+date: "2023-01-03"
+output: github_document
+---
+#### Purpose
+To make pretty tables. JK, the first table will show numbers of microbiome samples from each site x year x season x amplicon, and the second will show cultivar info by site.   
+
+#### libraries
+```{r}
+packages <- c("tidyverse", "phyloseq", "plyr")
+t <- lapply(packages, require, character.only = TRUE) # load all packages at once
+```
+
+#### load data
+```{r}
+all.fung.1920.c.ps <- readRDS(file = "/Users/klas0061/Desktop/UMN/phyloseqs/fung1920.cleaned.ps") # cleaned fungal phyloseq object
+core.bact.ps <- readRDS(file = "/Users/klas0061/Desktop/UMN/phyloseqs/core/core.bact.asvs.ps") # core bacterial phyloseq object to save memory
+```
+
+#### not a table anymore, but counts of ITS and 16S communities by site.  
+```{r}
+its.site <- table(data.frame(all.fung.1920.c.ps@sam_data)$state) # ITS microbiome counts by state
+bact.site <- table(data.frame(core.bact.ps@sam_data)$state) # 16S microbiome counts by state
+site.counts <- rbind("ITS count" = its.site, "16S count" = bact.site) # bind its and 16s counts
+colnames(site.counts) <- c("CO", "ID", "ME1", "MI", "MN1", "MN2", "OR", "ME2", "WI") # correct site labels
+site.counts <- site.counts[,c(7,2,1,5,6,9,4,3,8)] # order west to east 
+site.counts
+```
+
+
+#### table S1
+Counts of ITS and 16S communities by site, year, and season.  
+```{r}
+its.counts <- ddply(data.frame(all.fung.1920.c.ps@sam_data), .(year, season, state),nrow) # sum up ITS counts by year, season, and state
+colnames(its.counts)[4] <- "ITS count"
+
+bact.counts <- ddply(data.frame(core.bact.ps@sam_data), .(year, season, state),nrow) # sum up 16S counts by year, season, and state
+colnames(bact.counts)[4] <- "16S count"
+
+# merge them together and make the table neat
+both.counts <- left_join(bact.counts, its.counts, by = c("year", "season", "state")) %>% drop_na(state) # remove na states (blanks and tech reps)
+both.counts$year <- paste(20, both.counts$year, sep = "") # add 20 to year
+both.counts <- both.counts %>% arrange(state, year, factor(season, levels = c("Spring", "Summer", "Fall"))) # order by season
+both.counts[,2] <- ifelse(both.counts[,2] == "Spring", "Pre-plant",
+                          ifelse(both.counts[,2] == "Summer", "60 days after planting", 
+                                 ifelse(both.counts[,2] == "Fall", "After harvest", NA))) # change season labels to harvest descriptions
+both.counts[which(both.counts[,3] == "ME"),3] <- "ME1" # update site labels
+both.counts[which(both.counts[,3] == "US"),3] <- "ME2"
+both.counts[which(both.counts[,3] == "MN"),3] <- "MN1"
+both.counts[which(both.counts[,3] == "ND"),3] <- "MN2"
+colnames(both.counts)[3] <- "site"
+both.counts
+```
+
+We are missing: ID, MI, and WI fall 2019. And we have an extra MN fall (2018). 
+
+#### table S2
+Counts of 16S communities from each potato cultivar at each site.  
+```{r}
+cultivar.count <- ddply(data.frame(core.bact.ps@sam_data), .(cultivar, state),nrow) # get counts of cultivars
+colnames(cultivar.count)[c(2,3)] <- c("site","count") # fix colnames
+
+cultivar.count[which(cultivar.count[,2] == "ME"),2] <- "ME1" # update site labels
+cultivar.count[which(cultivar.count[,2] == "US"),2] <- "ME2"
+cultivar.count[which(cultivar.count[,2] == "MN"),2] <- "MN1"
+cultivar.count[which(cultivar.count[,2] == "ND"),2] <- "MN2"
+
+cultivar.count <- pivot_wider(cultivar.count, names_from = "cultivar", values_from = "count") # pivot wider, cultivars as columns
+cultivar.count <- cultivar.count[1:9,1:10] # cut out NAs
+cultivar.count <- data.frame(t(column_to_rownames(cultivar.count, "site"))) # put site as row name, transpose, and convert to df
+cultivar.count <- cultivar.count[,c(7,4,3,1,2,8,6,5,9)] # place sites in west-east order
+cultivar.count[is.na(cultivar.count)] <- 0 # turn NAs into zeros
+cultivar.count
+```
+All sites used Burbank. ME2 samples were between rows of different varieties. Norkotah is popular in the west, Bannock in MN, and Caribou in ME. All other varieties were grown in one site only. 
+
+#### session info
+```{r}
+sessionInfo()
+```

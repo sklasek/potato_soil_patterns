@@ -1,0 +1,159 @@
+---
+title: "alpha diversity II"
+output: github_document
+date: "2023-02-27"
+---
+#### purpose
+to make some better alpha diversity plots now that we're going to split the paper up into three. 
+
+#### load libraries
+```{r}
+packages <- c("tidyverse", "phyloseq", "speedyseq", "patchwork")
+t <- lapply(packages, require, character.only = TRUE) # load all packages at once
+```
+
+#### load phyloseq data and clean it
+Bacterial data didn't have ASVs named, or samples pruned to 10k reads. This below gives me a cleaned bacterial phyloseq object that I didn't have before.  
+```{r}
+fung.ps <- readRDS(file = "/Users/klas0061/Desktop/UMN/phyloseqs/first_two_years_all_sites/fung1920.cleaned.ps") # cleaned fungal phyloseq object
+bact.ps <- readRDS(file = "/Users/klas0061/Desktop/UMN/phyloseqs/first_two_years_all_sites/all.bact1920.ps") # "unclean" bacterial phyloseq object
+
+#### clean our bacterial object
+# assign ASV numbers cuz i'm sick of the sequences as the rownames
+number_asvs <- function(ps){
+  dna <- Biostrings::DNAStringSet(taxa_names(ps))
+  names(dna) <- taxa_names(ps)
+  ps <- merge_phyloseq(ps, dna)
+  taxa_names(ps) <- paste0("ASV", seq(ntaxa(ps)))
+  return(ps)
+}
+bact.ps <- number_asvs(bact.ps)
+
+# prune samples below 10k reads
+bact.ps <- subset_samples(bact.ps, sample_sums(bact.ps) > 10000) 
+
+# write out phyloseq object
+#saveRDS(bact.ps, "/Users/klas0061/Desktop/UMN/phyloseqs/bact1920.cleaned.ps") # cleaned fungal phyloseq object
+```
+
+#### rarefy to 10k reads 
+We're doing this for alpha diversity only, because shannon and invsimpson indices had small (but significant) increases with library size. 
+```{r}
+bact.rps <- rarefy_even_depth(bact.ps, sample.size = 10000, rngseed = 111) # setting a seed for reproducibility
+euks.rps <- rarefy_even_depth(fung.ps, sample.size = 10000, rngseed = 111) 
+```
+
+#### calculate alpha diversity
+```{r}
+# eukaryotes first
+adiv.euks <- estimate_richness(euks.rps, measures = c("Observed", "Shannon", "InvSimpson")) # calculate these three metrics
+adiv.euks$sample_name <- str_sub(rownames(adiv.euks), 1, 15) # get the sample name from the first 15 chars of the rowname
+colnames(adiv.euks)[1:3] <- c("Observed.euk", "Shannon.euk", "InvSimpson.euk") # specify domain in column name
+
+# bacteria next
+adiv.bact <- estimate_richness(bact.rps, measures = c("Observed", "Shannon", "InvSimpson")) # calculate these three metrics
+adiv.bact$sample_name <- str_sub(rownames(adiv.bact), 1, 15) # get the sample name from the first 15 chars of the rowname
+colnames(adiv.bact)[1:3] <- c("Observed.bact", "Shannon.bact", "InvSimpson.bact") # specify domain in column name
+
+# join them together
+adiv.r <- inner_join(adiv.bact, adiv.euks) %>% drop_na() # bind bacterial and eukaryotic data by sample names
+adiv.r$state <- str_sub(adiv.r$sample_name, 1, 2) # add state info
+adiv.r[which(adiv.r$state == "Co"),"state"] <- "CO"
+adiv.r[which(adiv.r$state == "ME"),"state"] <- "ME1"
+adiv.r[which(adiv.r$state == "US"),"state"] <- "ME2"
+adiv.r[which(adiv.r$state == "MN"),"state"] <- "MN1"
+adiv.r[which(adiv.r$state == "ND"),"state"] <- "MN2"
+```
+
+#### plot bacterial and eukaryotic alpha-diversity together
+```{r}
+# plot 
+cols.alphabetical <- c("#236192", "#B3A369", "#B0D7FF", "gray", "#18453B", "#7A0019", "#FFC72A", "#DC4405", "#C5050C")
+
+# plotting bacterial and eukaryotic data together
+both.observed <- ggplot(adiv.r, aes(Observed.bact, Observed.euk, color = state))+
+  geom_point()+
+  scale_color_manual("Site", values = cols.alphabetical)+
+  scale_x_continuous("Observed Bacterial ASVs")+scale_y_continuous("Observed Eukaryotic ASVs")+
+  facet_wrap(~state)+
+  theme_bw()
+
+both.shannon <- ggplot(adiv.r, aes(Shannon.bact, Shannon.euk, color = state))+
+  geom_point()+
+  scale_x_continuous("Shannon, Bacteria")+scale_y_continuous("Shannon, Eukaryotes")+
+  scale_color_manual("Site", values = cols.alphabetical)+
+  facet_wrap(~state)+
+  theme_bw()
+
+both.invsimpson <- ggplot(adiv.r, aes(InvSimpson.bact, InvSimpson.euk, color = state))+
+  geom_point()+
+  scale_x_continuous("Inverse Simpson, Bacteria")+scale_y_continuous("Inverse Simpson, Eukaryotes")+
+  scale_color_manual("Site", values = cols.alphabetical)+
+  facet_wrap(~state)+
+  theme_bw()
+
+both.observed + both.shannon + both.invsimpson + plot_layout(guides = "collect")
+
+# linear models
+summary(lm(Observed.euk ~ state + Observed.bact, adiv.r))
+summary(lm(Shannon.euk ~ state + Shannon.bact, adiv.r))
+summary(lm(InvSimpson.euk ~ state + InvSimpson.bact, adiv.r))
+```
+Interestingly, there are positive correlations
+
+#### Plot them separately
+```{r}
+# bacteria- pivot longer
+adiv.bact2 <- adiv.r %>% select(Observed.bact, Shannon.bact, InvSimpson.bact, state) 
+colnames(adiv.bact2)[1:3] <- c("Observed", "Shannon", "InvSimpson")
+adiv.bact2 <- adiv.bact2 %>% pivot_longer(!state, names_to = "index", values_to = "value")
+adiv.bact2$state <- factor(adiv.bact2$state, levels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2"))
+
+# euks- same
+adiv.euks2 <- adiv.r %>% select(Observed.euk, Shannon.euk, InvSimpson.euk, state) 
+colnames(adiv.euks2)[1:3] <- c("Observed", "Shannon", "InvSimpson")
+adiv.euks2 <- adiv.euks2 %>% pivot_longer(!state, names_to = "index", values_to = "value")
+adiv.euks2$state <- factor(adiv.euks2$state, levels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2"))
+
+# plot
+cols.factor.order <- c("#DC4405", "#B3A369", "#236192", "#7A0019", "#FFC72A", "#C5050C","#18453B", "#B0D7FF", "gray")
+allbact <- ggplot(adiv.bact2, aes(state, value, color = state))+
+  geom_jitter(width = 0.3, alpha = 0.5)+
+  facet_wrap(~factor(index, levels = c("Observed", "Shannon", "InvSimpson")), scales = "free")+
+  scale_x_discrete("")+scale_y_continuous("Bacterial alpha diversity")+
+  scale_color_manual("Site", values = cols.factor.order)+
+  theme_bw()+ggtitle("A")+theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+
+alleuks <- ggplot(adiv.euks2, aes(state, value, color = state))+
+  geom_jitter(width = 0.3, alpha = 0.5)+
+  facet_wrap(~factor(index, levels = c("Observed", "Shannon", "InvSimpson")), scales = "free")+
+  scale_x_discrete("")+scale_y_continuous("Eukaryotic alpha diversity")+
+  scale_color_manual("Site", values = cols.factor.order)+
+  theme_bw()+ggtitle("B")+theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+
+allbact / alleuks + plot_layout(guides = "collect")
+```
+
+Takeaways from alpha diversity: Both bacterial and eukaryotic alpha diversity metrics vary by state, but not in the same way for both communities (For example, ID has high bacterial diversity but medium eukaryotic diversity). There is a lot of spread within communities of the same state. There are positive relationships between bacterial and eukaryotic diversity across Observed and Shannon indices, not as much the case in Inv Simpson. 
+
+#### anovas
+```{r}
+# bacterial diversity by state
+summary(aov(value ~ state, data = adiv.bact2 %>% filter(index == "Observed")))
+summary(aov(value ~ state, data = adiv.bact2 %>% filter(index == "Shannon")))
+summary(aov(value ~ state, data = adiv.bact2 %>% filter(index == "InvSimpson")))
+
+# eukaryotic
+summary(aov(value ~ state, data = adiv.euks2 %>% filter(index == "Observed")))
+summary(aov(value ~ state, data = adiv.euks2 %>% filter(index == "Shannon")))
+summary(aov(value ~ state, data = adiv.euks2 %>% filter(index == "InvSimpson")))
+```
+While we see considerable within-site variation in alpha diversity, site-specific variance is much higher. 
+
+
+
+
+#### session info
+```{r}
+sessionInfo()
+```

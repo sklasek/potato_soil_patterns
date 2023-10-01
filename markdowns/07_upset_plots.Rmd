@@ -1,0 +1,75 @@
+---
+title: "better upset plots"
+author: "Scott Klasek"
+date: "2023-01-03"
+output: github_document
+---
+
+#### Purpose   
+Make better upset plots for figure 2.  
+
+#### load libraries
+```{r}
+packages <- c("tidyverse", "phyloseq", "speedyseq", "patchwork", "NatParksPalettes", "UpSetR", "scales")
+t <- lapply(packages, require, character.only = TRUE) # load all packages at once
+```
+
+#### load and clean up data
+```{r}
+# ITS phyloseq object
+all.fung.1920.c.ps <- readRDS(file = "/Users/scottklasek/Desktop/UMN/phyloseqs/fung1920.cleaned.ps") # cleaned fungal phyloseq object
+filter <- phyloseq::genefilter_sample(all.fung.1920.c.ps, filterfun_sample(function(x) x > 0)) # for each ASV get a true/false whether it has over 0 reads
+table(filter) # 68 taxa were present only in blanks or omitted samples < 10k reads
+all.fung.1920.c.ps <- prune_taxa(filter, all.fung.1920.c.ps) # remove these zero-count taxa from the ps object
+all.fung.1920.c.ps
+
+# bact venn object binary
+bact.venn_obj.binary <- read.csv(file = "/Users/scottklasek/Desktop/UMN/figures/from_server/16s.venn_obj.binary.csv", row.names = 1)
+```
+
+#### make a venn binary dataframe for ITS 
+```{r}
+# merge samples by state
+ps.state.upset <- merge_samples(all.fung.1920.c.ps, sample_data(all.fung.1920.c.ps)$state, fun = sum)
+# transposes the otu table and writes it as a dataframe
+venn_obj <- as.data.frame(t(otu_table(ps.state.upset)))
+venn_obj.binary <- sapply(venn_obj, function(x) ifelse(x > 0, 1, 0),
+                          USE.NAMES = T) # makes the dataframe binary 
+rownames(venn_obj.binary) <- rownames(venn_obj) # assigns the rownames as the same
+venn_obj.binary <- as.data.frame(venn_obj.binary) # creates a dataframe where rows are ASVs, columns are sites, and entries are either 1 or 0
+```
+
+#### plot ITS
+```{r}
+cols.west.east <- c("#DC4405", "#B3A369", "#236192", "#7A0019", "#FFC72A", "#C5050C", "#18453B", "#B0D7FF", "gray") # west-east color palette
+colnames(venn_obj.binary) <- c("CO", "ID", "ME1", "MI", "MN1", "MN2", "OR", "ME2", "WI") # fix the names of the sites
+
+its.state.upset <- upset(venn_obj.binary, 
+      sets = rev(c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2")),
+      sets.bar.color = rev(cols.west.east),
+      mainbar.y.label = 'ITS ASV count',
+      sets.x.label = 'Observed ASVs by site',
+      show.numbers = FALSE,
+      order.by = 'freq', nintersects = 25, # can change order.by to "degree", or adjust number of intersections to show 
+      keep.order = T)
+its.state.upset # 
+```
+
+#### plot bacteria
+```{r}
+colnames(bact.venn_obj.binary) <- c("CO", "ID", "ME1", "MI", "MN1", "MN2", "OR", "ME2", "WI") # fix the names of the sites
+bact.state.upset <- upset(bact.venn_obj.binary, 
+      sets = rev(c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2")),
+      sets.bar.color = rev(cols.west.east),
+      mainbar.y.label = '16S ASV count',
+      sets.x.label = 'Observed ASVs by site',
+      show.numbers = FALSE,
+      order.by = 'freq', nintersects = 39, # can change order.by to "degree", or adjust number of intersections to show 
+      keep.order = T)
+bact.state.upset
+```
+
+#### session info
+```{r}
+sessionInfo()
+```

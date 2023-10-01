@@ -1,0 +1,1124 @@
+03_phyloseq_data_cleanup.Rmd
+================
+Scott Klasek
+2022-06-14
+
+### Purpose
+
+After processing 16S and ITS samples on the server with R scripts, it’s
+time to look at their metadata and clean up any anomalies (particularly
+mislabeled 2- or 3- year rotations) as well as names and info
+corresponding to blanks or technical replicates. In addition, add
+treatment data to the phyloseq objects.
+
+I think I’ll save decontamination for a separate document. Only some
+states have blanks for decontamination anyway.
+
+#### load libraries
+
+``` r
+library(tidyverse)
+```
+
+    ## ── Attaching packages ─────────────────────────────────────── tidyverse 1.3.1 ──
+
+    ## ✔ ggplot2 3.3.6     ✔ purrr   0.3.4
+    ## ✔ tibble  3.1.7     ✔ dplyr   1.0.9
+    ## ✔ tidyr   1.2.0     ✔ stringr 1.4.0
+    ## ✔ readr   2.1.2     ✔ forcats 0.5.1
+
+    ## ── Conflicts ────────────────────────────────────────── tidyverse_conflicts() ──
+    ## ✖ dplyr::filter() masks stats::filter()
+    ## ✖ dplyr::lag()    masks stats::lag()
+
+``` r
+library(phyloseq)
+```
+
+#### import some necessary files
+
+``` r
+treatment.decoder <- read.csv(file="/Users/scottklasek/Desktop/UMN/phyloseqs/treatment_decoder.csv") # the csv to match treatment #s with plot #s
+treatment.decoder$plot <- as.numeric(treatment.decoder$plot)
+sk_cats <- read.csv(file="/Users/scottklasek/Desktop/UMN/phyloseqs/sk_categories.csv") # the csv to add treatment-specific metadata
+larkin.decoder <- read.csv(file="/Users/scottklasek/Desktop/UMN/phyloseqs/larkin_decoder.csv") # larkin-specific design needs a larkin-specific decoder file
+```
+
+#### define functions
+
+add_treatment_info uses the files treatment.decoder.csv and
+sk_categories.csv to import treatment numbers to the phyloseq object
+(corrected treatment numbers, so they are consistent with 1-6
+corresponding to three-year and 7-12 to two-year rotations from ALL
+states). Then from the treatment numbers, it finds the treatment
+categories I assigned and imports those too.
+
+``` r
+add_treatment_info <- function(ps, state_abbr){
+  see <- left_join(data.frame(sample_data(ps)), 
+                 treatment.decoder %>% filter(state==state_abbr) %>% select(rotation, plot, treatment_new, national_control), 
+                 by=c("rotation" = "rotation", "plot" = "plot")) # merges the dataframes by plot and rotation, add treatment_new and national_control columns
+  see2 <- left_join(see, sk_cats %>% filter(state==state_abbr) %>% select(4:ncol(sk_cats)), by="treatment_new") # add in the treatment metadata
+  rownames(see2) <- sample_names(ps) # add sample names to the dataframe
+  sample_data(ps) <- see2 # write the new dataframe into the ps object
+  return(ps)
+}
+
+# ITS database assigns all taxonomy character strings as beginning with "[a-z]__", remove these three annoying characters 
+fix_its_taxa <- function(ps){
+  tax_table(ps)[, colnames(tax_table(ps))] <- gsub(tax_table(ps)[, colnames(tax_table(ps))], pattern = "[a-z]__", replacement = "")
+  return(ps) # thanks! https://microbiome.github.io/tutorials/cleaning_taxonomy_table.html
+}
+```
+
+### Inspect/fix/add metadata of 16S phyloseq objects
+
+The phyloseq objects directly output from the Rscripts have names ending
+in “processed.ps”. The outputs here will end in “m.ps” for
+metadata-added.  
+First, correct the metadata that is present already, then add other
+types: season, block, and then the categories from add_treatment_info.
+
+#### Colorado (2019-2020)
+
+``` r
+# 2019
+CO_16S_2019_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/16S_processed/CO_16S_2019_processed.ps") # import ps
+sample_data(CO_16S_2019_processed.ps)$state <- rep("CO", times=length(sample_data(CO_16S_2019_processed.ps)$state)) # label state as "CO", not "Co"
+
+# add season
+sample_data(CO_16S_2019_processed.ps)$season <- ifelse(sample_data(CO_16S_2019_processed.ps)$month == 4, "Spring",
+                                                       ifelse(sample_data(CO_16S_2019_processed.ps)$month == 7, "Summer",
+                                                              ifelse(sample_data(CO_16S_2019_processed.ps)$month == 8, "Fall", NA))) # add season as character
+# add block
+sample_data(CO_16S_2019_processed.ps)$block <- NA # easy. CO has no blocks
+
+# add in the treatment numbers and metadata
+CO_16S_2019_m.ps <- add_treatment_info(CO_16S_2019_processed.ps, "CO") # m signifies metadata-added
+
+# final check and write out
+# sample_data(CO_16S_2019_m.ps)
+saveRDS(CO_16S_2019_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/16S_metadata_added/CO_16S_2019_m.ps")
+
+
+# 2020
+CO_16S_2020_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/16S_processed/CO_16S_2020_processed.ps") # import ps
+sample_data(CO_16S_2020_processed.ps)$state <- rep("CO", times=length(sample_data(CO_16S_2020_processed.ps)$state)) # label state as "CO", not "Co"
+sample_data(CO_16S_2020_processed.ps)[which(sample_data(CO_16S_2020_processed.ps)$month==8),"rotation"] <- 3 # relabel fall 2020 to 3-year rotation
+
+# add season
+sample_data(CO_16S_2020_processed.ps)$season <- ifelse(sample_data(CO_16S_2020_processed.ps)$month == 5, "Spring",
+                                                       ifelse(sample_data(CO_16S_2020_processed.ps)$month == 6, "Summer",
+                                                              ifelse(sample_data(CO_16S_2020_processed.ps)$month == 8, "Fall", NA))) # add season as character
+# add block
+sample_data(CO_16S_2020_processed.ps)$block <- NA # easy. CO has no blocks
+
+# add in the treatment numbers and metadata
+CO_16S_2020_m.ps <- add_treatment_info(CO_16S_2020_processed.ps, "CO") # m signifies metadata-added
+
+# final check and write out
+# sample_data(CO_16S_2020_m.ps)
+saveRDS(CO_16S_2020_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/16S_metadata_added/CO_16S_2020_m.ps")
+```
+
+#### Idaho (2019-2020)
+
+Remember that the fall 2019 Idaho samples were not sequenced
+
+``` r
+# 2019
+ID_16S_2019_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/16S_processed/ID_16S_2019_most_samples_processed.ps") # import ps
+
+# add season
+sample_data(ID_16S_2019_processed.ps)$season <- ifelse(sample_data(ID_16S_2019_processed.ps)$month == 4, "Spring",
+                                                       ifelse(sample_data(ID_16S_2019_processed.ps)$month == 6, "Summer", NA)) # add season as character
+# add block
+sample_data(ID_16S_2019_processed.ps)$block <- as.numeric(substring(sample_data(ID_16S_2019_processed.ps)$plot, 1,1)) # Block is first number of plot #
+
+# add in the treatment numbers and metadata
+ID_16S_2019_m.ps <- add_treatment_info(ID_16S_2019_processed.ps, "ID") # m signifies metadata-added
+
+# final check and write out
+# sample_data(ID_16S_2019_m.ps)
+saveRDS(ID_16S_2019_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/16S_metadata_added/ID_16S_2019_most_samples_m.ps")
+
+
+# 2020
+ID_16S_2020_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/16S_processed/ID_16S_2020_processed.ps") # import ps
+# sample_data(ID_16S_2020_processed.ps)
+
+# add season
+sample_data(ID_16S_2020_processed.ps)$season <- ifelse(sample_data(ID_16S_2020_processed.ps)$month == 4, "Spring",
+                                                       ifelse(sample_data(ID_16S_2020_processed.ps)$month == 6, "Summer",
+                                                              ifelse(sample_data(ID_16S_2020_processed.ps)$month == 8, "Fall", NA))) # add season as character
+# add block
+sample_data(ID_16S_2020_processed.ps)$block <- as.numeric(substring(sample_data(ID_16S_2020_processed.ps)$plot, 1,1)) # Block is first number of plot #
+
+# add in the treatment numbers and metadata
+ID_16S_2020_m.ps <- add_treatment_info(ID_16S_2020_processed.ps, "ID") # m signifies metadata-added
+
+# final check and write out
+# sample_data(ID_16S_2020_m.ps)
+saveRDS(ID_16S_2020_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/16S_metadata_added/ID_16S_2020_m.ps")
+```
+
+#### Maine (2019-2020)
+
+``` r
+# 2019
+ME_16S_2019_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/16S_processed/ME_16S_2019_processed.ps") # import ps
+
+# inspect the sample data
+# sample_data(ME_16S_2019_processed.ps)
+sample_data(ME_16S_2019_processed.ps)[which(sample_data(ME_16S_2019_processed.ps)$month==9),"rotation"] <- 2 # relabel fall 2019 to 2-year rotation
+
+# add season
+sample_data(ME_16S_2019_processed.ps)$season <- ifelse(sample_data(ME_16S_2019_processed.ps)$month == 5, "Spring",
+                                                       ifelse(sample_data(ME_16S_2019_processed.ps)$month == 7, "Summer",
+                                                              ifelse(sample_data(ME_16S_2019_processed.ps)$month == 9, "Fall", NA))) # add season as character
+# add block
+sample_data(ME_16S_2019_processed.ps)$block <- as.numeric(substring(sample_data(ME_16S_2019_processed.ps)$plot, 1,1)) # Block is first number of plot #
+
+# add in the treatment numbers and metadata
+ME_16S_2019_m.ps <- add_treatment_info(ME_16S_2019_processed.ps, "ME") # m signifies metadata-added
+
+# final check and write out
+# sample_data(ME_16S_2019_m.ps)
+saveRDS(ME_16S_2019_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/16S_metadata_added/ME_16S_2019_m.ps")
+
+
+# 2020
+ME_16S_2020_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/16S_processed/ME_16S_2020_processed.ps") # import ps
+
+# inspect
+# sample_data(ME_16S_2020_processed.ps)
+sample_data(ME_16S_2020_processed.ps)[which(sample_data(ME_16S_2020_processed.ps)$month==9),"rotation"] <- 3 # relabel fall 2020 to 3-year rotation
+
+# add season
+sample_data(ME_16S_2020_processed.ps)$season <- ifelse(sample_data(ME_16S_2020_processed.ps)$month == 5, "Spring",
+                                                       ifelse(sample_data(ME_16S_2020_processed.ps)$month == 7, "Summer",
+                                                              ifelse(sample_data(ME_16S_2020_processed.ps)$month == 9, "Fall", NA))) # add season as character
+# add block
+sample_data(ME_16S_2020_processed.ps)$block <- as.numeric(substring(sample_data(ME_16S_2020_processed.ps)$plot, 1,1)) # Block is first number of plot #
+
+# add in the treatment numbers and metadata
+ME_16S_2020_m.ps <- add_treatment_info(ME_16S_2020_processed.ps, "ME") # m signifies metadata-added
+
+# final check and write out
+# sample_data(ME_16S_2020_m.ps)
+saveRDS(ME_16S_2020_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/16S_metadata_added/ME_16S_2020_m.ps")
+```
+
+#### Michigan (2019-2020)
+
+``` r
+# 2019
+MI_16S_2019_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/16S_processed/MI_16S_2019_processed.ps") # import ps
+
+# inspect the sample data
+# sample_data(MI_16S_2019_processed.ps)
+
+# add season
+sample_data(MI_16S_2019_processed.ps)$season <- ifelse(sample_data(MI_16S_2019_processed.ps)$month == 6, "Spring",
+                                                       ifelse(sample_data(MI_16S_2019_processed.ps)$month == 8, "Summer", NA)) # add season as character
+# add block
+sample_data(MI_16S_2019_processed.ps)$block <- as.numeric(substring(sample_data(MI_16S_2019_processed.ps)$plot, 1,1)) # assign Block as the first number of plot #
+
+# add in the treatment numbers and metadata
+MI_16S_2019_m.ps <- add_treatment_info(MI_16S_2019_processed.ps, "MI") # m signifies metadata-added
+
+# final check and write out
+# sample_data(MI_16S_2019_m.ps)
+saveRDS(MI_16S_2019_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/16S_metadata_added/MI_16S_2019_m.ps")
+
+
+# 2020
+MI_16S_2020_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/16S_processed/MI_16S_2020_processed.ps") # import ps
+
+# inspect
+# sample_data(MI_16S_2020_processed.ps)
+
+# add season
+sample_data(MI_16S_2020_processed.ps)$season <- ifelse(sample_data(MI_16S_2020_processed.ps)$month == 6, "Spring",
+                                                       ifelse(sample_data(MI_16S_2020_processed.ps)$month == 8, "Summer",
+                                                              ifelse(sample_data(MI_16S_2020_processed.ps)$month == 10, "Fall", NA))) # add season as character
+# add block
+sample_data(MI_16S_2020_processed.ps)$block <- as.numeric(substring(sample_data(MI_16S_2020_processed.ps)$plot, 1,1)) # assign Block as the first number of plot #
+
+# add in the treatment numbers and metadata
+MI_16S_2020_m.ps <- add_treatment_info(MI_16S_2020_processed.ps, "MI") # m signifies metadata-added
+
+# final check and write out
+# sample_data(MI_16S_2020_m.ps)
+saveRDS(MI_16S_2020_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/16S_metadata_added/MI_16S_2020_m.ps")
+```
+
+#### Minnesota (2019-2020)
+
+The 40 fall 2018 samples are included in the 2019 phyloseq object, and I
+had to manually add the metadata to them. This was ok to do because
+different plots correspond to different treatments.
+
+``` r
+# 2019
+MN_16S_2019_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/16S_processed/MN_16S_2019_processed.ps") # import ps
+
+# inspect the sample data
+# sample_data(MN_16S_2019_processed.ps)
+
+# add NAs for data corresponding to technical replicates
+sample_data(MN_16S_2019_processed.ps)[which(sample_data(MN_16S_2019_processed.ps)$state=="te"),c(1,5)] <- NA
+
+sample_data(MN_16S_2019_processed.ps)[which(sample_data(MN_16S_2019_processed.ps)$month==9),"rotation"] <- 2 # relabel fall 2019 to 2-year rotation
+
+# add season
+sample_data(MN_16S_2019_processed.ps)$season <- ifelse(sample_data(MN_16S_2019_processed.ps)$month == 4, "Spring",
+                                                       ifelse(sample_data(MN_16S_2019_processed.ps)$month == 7, "Summer",
+                                                              ifelse(sample_data(MN_16S_2019_processed.ps)$month == 9, "Fall", 
+                                                                     ifelse(sample_data(MN_16S_2019_processed.ps)$month == 11, "Fall", NA)))) # add season as character
+# add block
+sample_data(MN_16S_2019_processed.ps)$block <- as.numeric(substring(sample_data(MN_16S_2019_processed.ps)$plot, 1,1)) # Block is first number of plot #
+
+# add metadata to MN without calling the function, because the function did not apply metadata to the 2018 samples:
+see <- left_join(data.frame(sample_data(MN_16S_2019_processed.ps)), 
+                 treatment.decoder %>% filter(state=="MN") %>% select(rotation, plot, treatment_new, national_control), 
+                 by="plot") # merges the dataframes by plot and rotation, add treatment_new and national_control columns
+see2 <- left_join(see, sk_cats %>% filter(state=="MN") %>% select(4:ncol(sk_cats)), by="treatment_new") # add in the treatment metadata
+rownames(see2) <- sample_names(MN_16S_2019_processed.ps) # add sample names to the dataframe
+see2 <- select(see2, -rotation.y)
+colnames(see2)[3] <- "rotation"
+sample_data(MN_16S_2019_processed.ps) <- see2 # write the new dataframe into the ps object
+MN_16S_2019_m.ps <- MN_16S_2019_processed.ps
+
+# final check and write out
+# sample_data(MN_16S_2019_m.ps)
+saveRDS(MN_16S_2019_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/16S_metadata_added/MN_16S_2019_m.ps")
+
+
+# 2020
+MN_16S_2020_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/16S_processed/MN_16S_2020_processed.ps") # import ps
+
+# inspect
+# sample_data(MN_16S_2020_processed.ps)
+sample_data(MN_16S_2020_processed.ps)[which(sample_data(MN_16S_2020_processed.ps)$month==9),"rotation"] <- 3 # relabel fall 2020 to 3-year rotation
+
+# add season
+sample_data(MN_16S_2020_processed.ps)$season <- ifelse(sample_data(MN_16S_2020_processed.ps)$month == 4, "Spring",
+                                                       ifelse(sample_data(MN_16S_2020_processed.ps)$month == 6, "Summer",
+                                                              ifelse(sample_data(MN_16S_2020_processed.ps)$month == 9, "Fall", NA))) # add season as character
+# add block
+sample_data(MN_16S_2020_processed.ps)$block <- as.numeric(substring(sample_data(MN_16S_2020_processed.ps)$plot, 1,1)) # Block is first number of plot #
+
+# add in the treatment numbers and metadata
+MN_16S_2020_m.ps <- add_treatment_info(MN_16S_2020_processed.ps, "MN") # m signifies metadata-added
+
+# final check and write out
+# sample_data(MN_16S_2020_m.ps)
+saveRDS(MN_16S_2020_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/16S_metadata_added/MN_16S_2020_m.ps")
+```
+
+#### North Dakota (2019-2020)
+
+``` r
+# 2019
+ND_16S_2019_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/16S_processed/ND_16S_2019_processed.ps") # import ps
+
+# inspect
+# sample_data(ND_16S_2019_processed.ps)
+
+# add season
+sample_data(ND_16S_2019_processed.ps)$season <- ifelse(sample_data(ND_16S_2019_processed.ps)$month == 4, "Spring",
+                                                       ifelse(sample_data(ND_16S_2019_processed.ps)$month == 7, "Summer", 
+                                                             ifelse(sample_data(ND_16S_2019_processed.ps)$month == 9, "Fall", NA))) # add season as character
+# add block
+sample_data(ND_16S_2019_processed.ps)$block <- as.numeric(substring(sample_data(ND_16S_2019_processed.ps)$plot, 1,1)) # Block is first number of plot #
+
+# add in the treatment numbers and metadata
+ND_16S_2019_m.ps <- add_treatment_info(ND_16S_2019_processed.ps, "ND") # m signifies metadata-added
+
+# final check and write out
+# sample_data(ND_16S_2019_m.ps)
+saveRDS(ND_16S_2019_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/16S_metadata_added/ND_16S_2019_m.ps")
+
+
+# 2020
+ND_16S_2020_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/16S_processed/ND_16S_2020_processed.ps") # import ps
+# sample_data(ND_16S_2020_processed.ps)
+
+# add season
+sample_data(ND_16S_2020_processed.ps)$season <- ifelse(sample_data(ND_16S_2020_processed.ps)$month == 4, "Spring",
+                                                       ifelse(sample_data(ND_16S_2020_processed.ps)$month == 7, "Summer",
+                                                              ifelse(sample_data(ND_16S_2020_processed.ps)$month == 10, "Fall", NA))) # add season as character
+# add block
+sample_data(ND_16S_2020_processed.ps)$block <- as.numeric(substring(sample_data(ND_16S_2020_processed.ps)$plot, 1,1)) # Block is first number of plot #
+
+# add in the treatment numbers and metadata
+ND_16S_2020_m.ps <- add_treatment_info(ND_16S_2020_processed.ps, "ND") # m signifies metadata-added
+
+# final check and write out
+# sample_data(ND_16S_2020_m.ps)
+saveRDS(ND_16S_2020_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/16S_metadata_added/ND_16S_2020_m.ps")
+```
+
+#### Oregon (2019-2020)
+
+Oregon has blanks! It CAN be decontaminated!
+
+``` r
+# 2019
+OR_16S_2019_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/16S_processed/OR_16S_2019_processed.ps") # import ps
+
+# inspect
+# sample_data(OR_16S_2019_processed.ps)
+
+# add NAs for the compost sample metadata
+sample_data(OR_16S_2019_processed.ps)[73,1:6] <- NA
+
+# add season
+sample_data(OR_16S_2019_processed.ps)$season <- ifelse(sample_data(OR_16S_2019_processed.ps)$month == 4, "Spring",
+                                                       ifelse(sample_data(OR_16S_2019_processed.ps)$month == 6, "Summer", 
+                                                             ifelse(sample_data(OR_16S_2019_processed.ps)$month == 8, "Fall", NA))) # add season as character
+
+# add block info (Oregon has plots numbered 100s to 800s for different rotations, an anomaly)
+ordf <- data.frame(sample_data(OR_16S_2019_processed.ps))
+ordf$block <- as.numeric(substring(sample_data(OR_16S_2019_processed.ps)$plot, 1,1)) # 3-yr rotation blocks are numbered as usual, the first digit of the plot #
+ordf[which(ordf$rotation==2),"block"] <- (ordf[which(ordf$rotation==2),"block"]-4) # 2-yr rotation blocks begin with 5-8, so subtract 4
+sample_data(OR_16S_2019_processed.ps) <- ordf
+
+# add in the treatment numbers and metadata
+OR_16S_2019_m.ps <- add_treatment_info(OR_16S_2019_processed.ps, "OR") # m signifies metadata-added
+
+# final check and write out
+# sample_data(OR_16S_2019_m.ps)
+saveRDS(OR_16S_2019_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/16S_metadata_added/OR_16S_2019_m.ps")
+
+
+# 2020
+OR_16S_2020_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/16S_processed/OR_16S_2020_processed.ps") # import ps
+# sample_data(OR_16S_2020_processed.ps)
+
+# add NAs as metadata for the blank samples
+sample_data(OR_16S_2020_processed.ps)[c(49,50,75),1:6] <- NA
+
+# add season
+sample_data(OR_16S_2020_processed.ps)$season <- ifelse(sample_data(OR_16S_2020_processed.ps)$month == 4, "Spring",
+                                                       ifelse(sample_data(OR_16S_2020_processed.ps)$month == 6, "Summer",
+                                                              ifelse(sample_data(OR_16S_2020_processed.ps)$month == 8, "Fall", NA))) # add season as character
+
+# add block info (Oregon has plots numbered 100s to 800s for different rotations, an anomaly)
+ordf <- data.frame(sample_data(OR_16S_2020_processed.ps))
+ordf$block <- as.numeric(substring(sample_data(OR_16S_2020_processed.ps)$plot, 1,1)) # 3-yr rotation blocks are numbered as usual, the first digit of the plot #
+ordf[which(ordf$rotation==2),"block"] <- (ordf[which(ordf$rotation==2),"block"]-4) # 2-yr rotation blocks begin with 5-8, so subtract 4
+sample_data(OR_16S_2020_processed.ps) <- ordf
+
+# add in the treatment numbers and metadata
+OR_16S_2020_m.ps <- add_treatment_info(OR_16S_2020_processed.ps, "OR") # m signifies metadata-added
+
+# final check and write out
+# sample_data(OR_16S_2020_m.ps)
+saveRDS(OR_16S_2020_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/16S_metadata_added/OR_16S_2020_m.ps")
+```
+
+#### Wisconsin (2019-2020)
+
+``` r
+# 2019
+WI_16S_2019_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/16S_processed/WI_16S_2019_processed.ps") # import ps
+
+# inspect
+# sample_data(WI_16S_2019_processed.ps)
+
+# add season
+sample_data(WI_16S_2019_processed.ps)$season <- ifelse(sample_data(WI_16S_2019_processed.ps)$month == 4, "Spring",
+                                                       ifelse(sample_data(WI_16S_2019_processed.ps)$month == 7, "Summer", NA)) # add season as character
+# add block
+sample_data(WI_16S_2019_processed.ps)$block <- as.numeric(substring(sample_data(WI_16S_2019_processed.ps)$plot, 1,1)) # Block is first number of plot #
+
+# add in the treatment numbers and metadata
+WI_16S_2019_m.ps <- add_treatment_info(WI_16S_2019_processed.ps, "WI") # m signifies metadata-added
+
+# final check and write out
+# sample_data(WI_16S_2019_m.ps)
+saveRDS(WI_16S_2019_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/16S_metadata_added/WI_16S_2019_m.ps")
+
+
+# 2020
+WI_16S_2020_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/16S_processed/WI_16S_2020_processed.ps") # import ps
+# sample_data(WI_16S_2020_processed.ps)
+
+# add season
+sample_data(WI_16S_2020_processed.ps)$season <- ifelse(sample_data(WI_16S_2020_processed.ps)$month == 5, "Spring",
+                                                       ifelse(sample_data(WI_16S_2020_processed.ps)$month == 6, "Summer",
+                                                              ifelse(sample_data(WI_16S_2020_processed.ps)$month == 11, "Fall", NA))) # add season as character
+# add block
+sample_data(WI_16S_2020_processed.ps)$block <- as.numeric(substring(sample_data(WI_16S_2020_processed.ps)$plot, 1,1)) # Block is first number of plot #
+
+# there are duplicate samples, naming messed up their metadata. fix:
+sample_data(WI_16S_2020_processed.ps)[c(86,88,90),"year"] <- 20
+sample_data(WI_16S_2020_processed.ps)[c(86,88,90),"month"] <- "11"
+sample_data(WI_16S_2020_processed.ps)[c(86,88,90),"season"] <- "Fall"
+
+# add in the treatment numbers and metadata
+WI_16S_2020_m.ps <- add_treatment_info(WI_16S_2020_processed.ps, "WI") # m signifies metadata-added
+
+# final check and write out
+# sample_data(WI_16S_2020_m.ps)
+saveRDS(WI_16S_2020_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/16S_metadata_added/WI_16S_2020_m.ps")
+```
+
+#### Larkin (2019-2020)
+
+The one with all the dreaded anomalies. Note: Potatoes grown every
+year - each 3-yr rotation has three separate plots/block, each in
+different phase of rotation, so that one plot of every rotation
+treatment is in potato every year. Thus 3 plots for 3-yr, 2 plots for
+2-yr, etc. But to simplify, I put cover crop information in the same
+columns of the sample data as all the other states depending on rotation
+(2-yr cover is 2019 and 2021, 3-yr is 2020). Importing the metadata in
+one-step and it wasn’t nearly as much of a pain as I thought it would
+be.
+
+``` r
+# 2019
+US_16S_2019_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/16S_processed/larkin_16S_2019_processed.ps") # import ps
+
+# inspect
+# sample_data(US_16S_2019_processed.ps)
+
+# add season
+sample_data(US_16S_2019_processed.ps)$season <- ifelse(sample_data(US_16S_2019_processed.ps)$month == 6, "Spring",
+                                                       ifelse(sample_data(US_16S_2019_processed.ps)$month == 8, "Summer",
+                                                              ifelse(sample_data(US_16S_2019_processed.ps)$month == 10, "Fall", NA))) # add season as character
+# import everything including block
+see <- left_join(data.frame(sample_data(US_16S_2019_processed.ps)), 
+                 larkin.decoder %>% select(-state), 
+                 by="plot") # merges the dataframes by plot, adding treatment info as well
+
+# rewrite the rotation in column two (rotation.x) with the latter one (rotation.y) and correct column names
+see$rotation.x <- see$rotation.y
+see <- see %>% select(-rotation.y)
+colnames(see)[3] <- "rotation"
+colnames(see)[15] <- "general_category"
+
+rownames(see) <- sample_names(US_16S_2019_processed.ps) # add sample names to the dataframe
+# all.equal(colnames(see), colnames(sample_data(WI_16S_2019_m.ps))) # check to see the column names are the same as other ps objects
+sample_data(US_16S_2019_processed.ps) <- see # write the new dataframe into the ps object
+US_16S_2019_m.ps <- US_16S_2019_processed.ps # new ps object
+
+# final check and write out
+# sample_data(US_16S_2019_m.ps)
+saveRDS(US_16S_2019_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/16S_metadata_added/US_16S_2019_m.ps")
+
+# 2020
+US_16S_2020_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/16S_processed/larkin_16S_2020_processed.ps") # import ps
+
+# inspect
+# sample_data(US_16S_2020_processed.ps)
+
+# add season
+sample_data(US_16S_2020_processed.ps)$season <- ifelse(sample_data(US_16S_2020_processed.ps)$month == 5, "Spring",
+                                                       ifelse(sample_data(US_16S_2020_processed.ps)$month == 7, "Summer",
+                                                              ifelse(sample_data(US_16S_2020_processed.ps)$month == 10, "Fall", NA))) # add season as character
+# import everything including block
+see <- left_join(data.frame(sample_data(US_16S_2020_processed.ps)), 
+                 larkin.decoder %>% select(-state), 
+                 by="plot") # merges the dataframes by plot, adding treatment info as well
+
+# rewrite the rotation in column two (rotation.x) with the latter one (rotation.y) and correct column names
+see$rotation.x <- see$rotation.y
+see <- see %>% select(-rotation.y)
+colnames(see)[3] <- "rotation"
+colnames(see)[15] <- "general_category"
+
+rownames(see) <- sample_names(US_16S_2020_processed.ps) # add sample names to the dataframe
+# all.equal(colnames(see), colnames(sample_data(WI_16S_2020_m.ps))) # check to see the column names are the same as other ps objects
+sample_data(US_16S_2020_processed.ps) <- see # write the new dataframe into the ps object
+US_16S_2020_m.ps <- US_16S_2020_processed.ps # new ps object
+
+# final check and write out
+# sample_data(US_16S_2020_m.ps)
+saveRDS(US_16S_2020_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/16S_metadata_added/US_16S_2020_m.ps")
+```
+
+### Inspect metadata of ITS phyloseq objects
+
+#### Colorado (2019-2020)
+
+``` r
+# 2019
+CO_ITS_2019_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_processed/CO_ITS_2019_processed.ps") # import ps
+sample_data(CO_ITS_2019_processed.ps)$state <- rep("CO", times=length(sample_data(CO_ITS_2019_processed.ps)$state)) # label state as "CO", not "Co"
+
+# add season
+sample_data(CO_ITS_2019_processed.ps)$season <- ifelse(sample_data(CO_ITS_2019_processed.ps)$month == 4, "Spring",
+                                                       ifelse(sample_data(CO_ITS_2019_processed.ps)$month == 7, "Summer",
+                                                              ifelse(sample_data(CO_ITS_2019_processed.ps)$month == 8, "Fall", NA))) # add season as character
+# add block
+sample_data(CO_ITS_2019_processed.ps)$block <- NA # easy. CO has no blocks
+
+# add in the treatment numbers and metadata
+CO_ITS_2019_m.ps <- add_treatment_info(CO_ITS_2019_processed.ps, "CO") # m signifies metadata-added
+
+# fix taxonomy labels
+CO_ITS_2019_m.ps <- fix_its_taxa(CO_ITS_2019_m.ps)
+
+# final check and write out
+# sample_data(CO_ITS_2019_m.ps)
+saveRDS(CO_ITS_2019_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_metadata_added/CO_ITS_2019_m.ps")
+
+
+# 2020
+CO_ITS_2020_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_processed/CO_ITS_2020_processed.ps") # import ps
+sample_data(CO_ITS_2020_processed.ps)$state <- rep("CO", times=length(sample_data(CO_ITS_2020_processed.ps)$state)) # label state as "CO", not "Co"
+sample_data(CO_ITS_2020_processed.ps)[which(sample_data(CO_ITS_2020_processed.ps)$month==8),"rotation"] <- 3 # relabel fall 2020 to 3-year rotation
+
+# add season
+sample_data(CO_ITS_2020_processed.ps)$season <- ifelse(sample_data(CO_ITS_2020_processed.ps)$month == 5, "Spring",
+                                                       ifelse(sample_data(CO_ITS_2020_processed.ps)$month == 6, "Summer",
+                                                              ifelse(sample_data(CO_ITS_2020_processed.ps)$month == 8, "Fall", NA))) # add season as character
+# add block
+sample_data(CO_ITS_2020_processed.ps)$block <- NA # easy. CO has no blocks
+
+# add in the treatment numbers and metadata
+CO_ITS_2020_m.ps <- add_treatment_info(CO_ITS_2020_processed.ps, "CO") # m signifies metadata-added
+
+# fix taxonomy labels
+CO_ITS_2020_m.ps <- fix_its_taxa(CO_ITS_2020_m.ps)
+
+# final check and write out
+# sample_data(CO_ITS_2020_m.ps)
+saveRDS(CO_ITS_2020_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_metadata_added/CO_ITS_2020_m.ps")
+```
+
+#### Idaho (2019-2020)
+
+Fall 2019 Idaho ITS samples were not sequenced either.
+
+``` r
+# 2019
+ID_ITS_2019_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_processed/ID_ITS_2019_most_samples_processed.ps") # import ps
+
+# add season
+sample_data(ID_ITS_2019_processed.ps)$season <- ifelse(sample_data(ID_ITS_2019_processed.ps)$month == 4, "Spring",
+                                                       ifelse(sample_data(ID_ITS_2019_processed.ps)$month == 6, "Summer", NA)) # add season as character
+# add block
+sample_data(ID_ITS_2019_processed.ps)$block <- as.numeric(substring(sample_data(ID_ITS_2019_processed.ps)$plot, 1,1)) # Block is first number of plot #
+
+# add in the treatment numbers and metadata
+ID_ITS_2019_m.ps <- add_treatment_info(ID_ITS_2019_processed.ps, "ID") # m signifies metadata-added
+
+# fix taxonomy labels
+ID_ITS_2019_m.ps <- fix_its_taxa(ID_ITS_2019_m.ps)
+
+# final check and write out
+# sample_data(ID_ITS_2019_m.ps)
+saveRDS(ID_ITS_2019_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_metadata_added/ID_ITS_2019_most_samples_m.ps")
+
+
+# 2020
+ID_ITS_2020_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_processed/ID_ITS_2020_processed.ps") # import ps
+# sample_data(ID_ITS_2020_processed.ps)
+
+# add season
+sample_data(ID_ITS_2020_processed.ps)$season <- ifelse(sample_data(ID_ITS_2020_processed.ps)$month == 4, "Spring",
+                                                       ifelse(sample_data(ID_ITS_2020_processed.ps)$month == 6, "Summer",
+                                                              ifelse(sample_data(ID_ITS_2020_processed.ps)$month == 8, "Fall", NA))) # add season as character
+# add block
+sample_data(ID_ITS_2020_processed.ps)$block <- as.numeric(substring(sample_data(ID_ITS_2020_processed.ps)$plot, 1,1)) # Block is first number of plot #
+
+# add in the treatment numbers and metadata
+ID_ITS_2020_m.ps <- add_treatment_info(ID_ITS_2020_processed.ps, "ID") # m signifies metadata-added
+
+# fix taxonomy labels
+ID_ITS_2020_m.ps <- fix_its_taxa(ID_ITS_2020_m.ps)
+
+# final check and write out
+# sample_data(ID_ITS_2020_m.ps)
+saveRDS(ID_ITS_2020_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_metadata_added/ID_ITS_2020_m.ps")
+```
+
+#### Maine (2019-2020)
+
+``` r
+# 2019
+ME_ITS_2019_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_processed/ME_ITS_2019_processed.ps") # import ps
+
+# inspect the sample data
+# sample_data(ME_ITS_2019_processed.ps)
+sample_data(ME_ITS_2019_processed.ps)[which(sample_data(ME_ITS_2019_processed.ps)$month==9),"rotation"] <- 2 # relabel fall 2019 to 2-year rotation
+
+# add season
+sample_data(ME_ITS_2019_processed.ps)$season <- ifelse(sample_data(ME_ITS_2019_processed.ps)$month == 5, "Spring",
+                                                       ifelse(sample_data(ME_ITS_2019_processed.ps)$month == 7, "Summer",
+                                                              ifelse(sample_data(ME_ITS_2019_processed.ps)$month == 9, "Fall", NA))) # add season as character
+# add block
+sample_data(ME_ITS_2019_processed.ps)$block <- as.numeric(substring(sample_data(ME_ITS_2019_processed.ps)$plot, 1,1)) # Block is first number of plot #
+
+# add in the treatment numbers and metadata
+ME_ITS_2019_m.ps <- add_treatment_info(ME_ITS_2019_processed.ps, "ME") # m signifies metadata-added
+
+# fix taxonomy labels
+ME_ITS_2019_m.ps <- fix_its_taxa(ME_ITS_2019_m.ps)
+
+# final check and write out
+# sample_data(ME_ITS_2019_m.ps)
+saveRDS(ME_ITS_2019_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_metadata_added/ME_ITS_2019_m.ps")
+
+
+# 2020
+ME_ITS_2020_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_processed/ME_ITS_2020_processed.ps") # import ps
+
+# inspect
+# sample_data(ME_ITS_2020_processed.ps)
+sample_data(ME_ITS_2020_processed.ps)[which(sample_data(ME_ITS_2020_processed.ps)$month==9),"rotation"] <- 3 # relabel fall 2020 to 3-year rotation
+
+# add season
+sample_data(ME_ITS_2020_processed.ps)$season <- ifelse(sample_data(ME_ITS_2020_processed.ps)$month == 5, "Spring",
+                                                       ifelse(sample_data(ME_ITS_2020_processed.ps)$month == 7, "Summer",
+                                                              ifelse(sample_data(ME_ITS_2020_processed.ps)$month == 9, "Fall", NA))) # add season as character
+# add block
+sample_data(ME_ITS_2020_processed.ps)$block <- as.numeric(substring(sample_data(ME_ITS_2020_processed.ps)$plot, 1,1)) # Block is first number of plot #
+
+# add in the treatment numbers and metadata
+ME_ITS_2020_m.ps <- add_treatment_info(ME_ITS_2020_processed.ps, "ME") # m signifies metadata-added
+
+# fix taxonomy labels
+ME_ITS_2020_m.ps <- fix_its_taxa(ME_ITS_2020_m.ps)
+
+# final check and write out
+# sample_data(ME_ITS_2020_m.ps)
+saveRDS(ME_ITS_2020_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_metadata_added/ME_ITS_2020_m.ps")
+```
+
+#### Michigan (2019-2020)
+
+``` r
+# 2019
+MI_ITS_2019_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_processed/MI_ITS_2019_processed.ps") # import ps
+
+# inspect the sample data
+# sample_data(MI_ITS_2019_processed.ps)
+
+# add season
+sample_data(MI_ITS_2019_processed.ps)$season <- ifelse(sample_data(MI_ITS_2019_processed.ps)$month == 6, "Spring",
+                                                       ifelse(sample_data(MI_ITS_2019_processed.ps)$month == 8, "Summer", NA)) # add season as character
+# add block
+sample_data(MI_ITS_2019_processed.ps)$block <- as.numeric(substring(sample_data(MI_ITS_2019_processed.ps)$plot, 1,1)) # assign Block as the first number of plot #
+
+# add in the treatment numbers and metadata
+MI_ITS_2019_m.ps <- add_treatment_info(MI_ITS_2019_processed.ps, "MI") # m signifies metadata-added
+
+# fix taxonomy labels
+MI_ITS_2019_m.ps <- fix_its_taxa(MI_ITS_2019_m.ps)
+
+# final check and write out
+# sample_data(MI_ITS_2019_m.ps)
+saveRDS(MI_ITS_2019_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_metadata_added/MI_ITS_2019_m.ps")
+
+
+# 2020
+MI_ITS_2020_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_processed/MI_ITS_2020_processed.ps") # import ps
+
+# inspect
+# sample_data(MI_ITS_2020_processed.ps)
+
+# add season
+sample_data(MI_ITS_2020_processed.ps)$season <- ifelse(sample_data(MI_ITS_2020_processed.ps)$month == 6, "Spring",
+                                                       ifelse(sample_data(MI_ITS_2020_processed.ps)$month == 8, "Summer",
+                                                              ifelse(sample_data(MI_ITS_2020_processed.ps)$month == 10, "Fall", NA))) # add season as character
+# add block
+sample_data(MI_ITS_2020_processed.ps)$block <- as.numeric(substring(sample_data(MI_ITS_2020_processed.ps)$plot, 1,1)) # assign Block as the first number of plot #
+
+# add in the treatment numbers and metadata
+MI_ITS_2020_m.ps <- add_treatment_info(MI_ITS_2020_processed.ps, "MI") # m signifies metadata-added
+
+# fix taxonomy labels
+MI_ITS_2020_m.ps <- fix_its_taxa(MI_ITS_2020_m.ps)
+
+# final check and write out
+# sample_data(MI_ITS_2020_m.ps)
+saveRDS(MI_ITS_2020_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_metadata_added/MI_ITS_2020_m.ps")
+```
+
+#### Minnesota (2019-2020)
+
+The 40 fall 2018 samples are included in the 2019 phyloseq object, and I
+had to manually add the metadata to them. This was ok to do because
+different plots correspond to different treatments.
+
+``` r
+# 2019
+MN_ITS_2019_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_processed/MN_ITS_2019_processed.ps") # import ps
+
+# inspect the sample data
+# sample_data(MN_ITS_2019_processed.ps)
+
+sample_data(MN_ITS_2019_processed.ps)[which(sample_data(MN_ITS_2019_processed.ps)$month==9),"rotation"] <- 2 # relabel fall 2019 to 2-year rotation
+
+# add season
+sample_data(MN_ITS_2019_processed.ps)$season <- ifelse(sample_data(MN_ITS_2019_processed.ps)$month == 4, "Spring",
+                                                       ifelse(sample_data(MN_ITS_2019_processed.ps)$month == 7, "Summer",
+                                                              ifelse(sample_data(MN_ITS_2019_processed.ps)$month == 9, "Fall", 
+                                                                     ifelse(sample_data(MN_ITS_2019_processed.ps)$month == 11, "Fall", NA)))) # add season as character
+# add block
+sample_data(MN_ITS_2019_processed.ps)$block <- as.numeric(substring(sample_data(MN_ITS_2019_processed.ps)$plot, 1,1)) # Block is first number of plot #
+
+# add metadata to MN without calling the function, because the function did not apply metadata to the 2018 samples:
+see <- left_join(data.frame(sample_data(MN_ITS_2019_processed.ps)), 
+                 treatment.decoder %>% filter(state=="MN") %>% select(rotation, plot, treatment_new, national_control), 
+                 by="plot") # merges the dataframes by plot and rotation, add treatment_new and national_control columns
+see2 <- left_join(see, sk_cats %>% filter(state=="MN") %>% select(4:ncol(sk_cats)), by="treatment_new") # add in the treatment metadata
+rownames(see2) <- sample_names(MN_ITS_2019_processed.ps) # add sample names to the dataframe
+see2 <- select(see2, -rotation.y)
+colnames(see2)[3] <- "rotation"
+sample_data(MN_ITS_2019_processed.ps) <- see2 # write the new dataframe into the ps object
+MN_ITS_2019_m.ps <- MN_ITS_2019_processed.ps
+
+# fix taxonomy labels
+MN_ITS_2019_m.ps <- fix_its_taxa(MN_ITS_2019_m.ps)
+
+# final check and write out
+# sample_data(MN_ITS_2019_m.ps)
+saveRDS(MN_ITS_2019_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_metadata_added/MN_ITS_2019_m.ps")
+
+
+# 2020
+MN_ITS_2020_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_processed/MN_ITS_2020_processed.ps") # import ps
+
+# inspect
+# sample_data(MN_ITS_2020_processed.ps)
+sample_data(MN_ITS_2020_processed.ps)[which(sample_data(MN_ITS_2020_processed.ps)$month==9),"rotation"] <- 3 # relabel fall 2020 to 3-year rotation
+
+# add season
+sample_data(MN_ITS_2020_processed.ps)$season <- ifelse(sample_data(MN_ITS_2020_processed.ps)$month == 4, "Spring",
+                                                       ifelse(sample_data(MN_ITS_2020_processed.ps)$month == 6, "Summer",
+                                                              ifelse(sample_data(MN_ITS_2020_processed.ps)$month == 9, "Fall", NA))) # add season as character
+# add block
+sample_data(MN_ITS_2020_processed.ps)$block <- as.numeric(substring(sample_data(MN_ITS_2020_processed.ps)$plot, 1,1)) # Block is first number of plot #
+
+# add in the treatment numbers and metadata
+MN_ITS_2020_m.ps <- add_treatment_info(MN_ITS_2020_processed.ps, "MN") # m signifies metadata-added
+
+# fix taxonomy labels
+MN_ITS_2020_m.ps <- fix_its_taxa(MN_ITS_2020_m.ps)
+
+# final check and write out
+# sample_data(MN_ITS_2020_m.ps)
+saveRDS(MN_ITS_2020_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_metadata_added/MN_ITS_2020_m.ps")
+```
+
+#### North Dakota (2019-2020)
+
+``` r
+# 2019
+ND_ITS_2019_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_processed/ND_ITS_2019_processed.ps") # import ps
+
+# inspect
+# sample_data(ND_ITS_2019_processed.ps)
+
+# add season
+sample_data(ND_ITS_2019_processed.ps)$season <- ifelse(sample_data(ND_ITS_2019_processed.ps)$month == 4, "Spring",
+                                                       ifelse(sample_data(ND_ITS_2019_processed.ps)$month == 7, "Summer", 
+                                                             ifelse(sample_data(ND_ITS_2019_processed.ps)$month == 9, "Fall", NA))) # add season as character
+# add block
+sample_data(ND_ITS_2019_processed.ps)$block <- as.numeric(substring(sample_data(ND_ITS_2019_processed.ps)$plot, 1,1)) # Block is first number of plot #
+
+# add in the treatment numbers and metadata
+ND_ITS_2019_m.ps <- add_treatment_info(ND_ITS_2019_processed.ps, "ND") # m signifies metadata-added
+
+# fix taxonomy labels
+ND_ITS_2019_m.ps <- fix_its_taxa(ND_ITS_2019_m.ps)
+
+# final check and write out
+# sample_data(ND_ITS_2019_m.ps)
+saveRDS(ND_ITS_2019_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_metadata_added/ND_ITS_2019_m.ps")
+
+
+# 2020
+ND_ITS_2020_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_processed/ND_ITS_2020_processed.ps") # import ps
+# sample_data(ND_ITS_2020_processed.ps)
+
+# add season
+sample_data(ND_ITS_2020_processed.ps)$season <- ifelse(sample_data(ND_ITS_2020_processed.ps)$month == 4, "Spring",
+                                                       ifelse(sample_data(ND_ITS_2020_processed.ps)$month == 7, "Summer",
+                                                              ifelse(sample_data(ND_ITS_2020_processed.ps)$month == 10, "Fall", NA))) # add season as character
+# add block
+sample_data(ND_ITS_2020_processed.ps)$block <- as.numeric(substring(sample_data(ND_ITS_2020_processed.ps)$plot, 1,1)) # Block is first number of plot #
+
+# add in the treatment numbers and metadata
+ND_ITS_2020_m.ps <- add_treatment_info(ND_ITS_2020_processed.ps, "ND") # m signifies metadata-added
+
+# fix taxonomy labels
+ND_ITS_2020_m.ps <- fix_its_taxa(ND_ITS_2020_m.ps)
+
+# final check and write out
+# sample_data(ND_ITS_2020_m.ps)
+saveRDS(ND_ITS_2020_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_metadata_added/ND_ITS_2020_m.ps")
+```
+
+#### Oregon (2019-2020)
+
+Oregon has blanks! It CAN be decontaminated!
+
+``` r
+# 2019
+OR_ITS_2019_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_processed/OR_ITS_2019_processed.ps") # import ps
+
+# inspect
+# sample_data(OR_ITS_2019_processed.ps)
+
+# add season
+sample_data(OR_ITS_2019_processed.ps)$season <- ifelse(sample_data(OR_ITS_2019_processed.ps)$month == 4, "Spring",
+                                                       ifelse(sample_data(OR_ITS_2019_processed.ps)$month == 6, "Summer", 
+                                                             ifelse(sample_data(OR_ITS_2019_processed.ps)$month == 8, "Fall", NA))) # add season as character
+
+# add block info (Oregon has plots numbered 100s to 800s for different rotations, an anomaly)
+ordf <- data.frame(sample_data(OR_ITS_2019_processed.ps))
+ordf$block <- as.numeric(substring(sample_data(OR_ITS_2019_processed.ps)$plot, 1,1)) # 3-yr rotation blocks are numbered as usual, the first digit of the plot #
+ordf[which(ordf$rotation==2),"block"] <- (ordf[which(ordf$rotation==2),"block"]-4) # 2-yr rotation blocks begin with 5-8, so subtract 4
+sample_data(OR_ITS_2019_processed.ps) <- ordf
+
+# add in the treatment numbers and metadata
+OR_ITS_2019_m.ps <- add_treatment_info(OR_ITS_2019_processed.ps, "OR") # m signifies metadata-added
+
+# fix taxonomy labels
+OR_ITS_2019_m.ps <- fix_its_taxa(OR_ITS_2019_m.ps)
+
+# final check and write out
+# sample_data(OR_ITS_2019_m.ps)
+saveRDS(OR_ITS_2019_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_metadata_added/OR_ITS_2019_m.ps")
+
+
+# 2020
+OR_ITS_2020_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_processed/OR_ITS_2020_processed.ps") # import ps
+# sample_data(OR_ITS_2020_processed.ps)
+
+# add NAs as metadata for the blank samples
+sample_data(OR_ITS_2020_processed.ps)[c(49,50,75),1:6] <- NA
+
+# add season
+sample_data(OR_ITS_2020_processed.ps)$season <- ifelse(sample_data(OR_ITS_2020_processed.ps)$month == 4, "Spring",
+                                                       ifelse(sample_data(OR_ITS_2020_processed.ps)$month == 6, "Summer",
+                                                              ifelse(sample_data(OR_ITS_2020_processed.ps)$month == 8, "Fall", NA))) # add season as character
+
+# add block info (Oregon has plots numbered 100s to 800s for different rotations, an anomaly)
+ordf <- data.frame(sample_data(OR_ITS_2020_processed.ps))
+ordf$block <- as.numeric(substring(sample_data(OR_ITS_2020_processed.ps)$plot, 1,1)) # 3-yr rotation blocks are numbered as usual, the first digit of the plot #
+ordf[which(ordf$rotation==2),"block"] <- (ordf[which(ordf$rotation==2),"block"]-4) # 2-yr rotation blocks begin with 5-8, so subtract 4
+sample_data(OR_ITS_2020_processed.ps) <- ordf
+
+# add in the treatment numbers and metadata
+OR_ITS_2020_m.ps <- add_treatment_info(OR_ITS_2020_processed.ps, "OR") # m signifies metadata-added
+
+# fix taxonomy labels
+OR_ITS_2020_m.ps <- fix_its_taxa(OR_ITS_2020_m.ps)
+
+# final check and write out
+# sample_data(OR_ITS_2020_m.ps)
+saveRDS(OR_ITS_2020_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_metadata_added/OR_ITS_2020_m.ps")
+```
+
+#### Wisconsin (2019-2020)
+
+``` r
+# 2019
+WI_ITS_2019_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_processed/WI_ITS_2019_processed.ps") # import ps
+
+# inspect
+# sample_data(WI_ITS_2019_processed.ps)
+
+# add season
+sample_data(WI_ITS_2019_processed.ps)$season <- ifelse(sample_data(WI_ITS_2019_processed.ps)$month == 4, "Spring",
+                                                       ifelse(sample_data(WI_ITS_2019_processed.ps)$month == 7, "Summer", NA)) # add season as character
+# add block
+sample_data(WI_ITS_2019_processed.ps)$block <- as.numeric(substring(sample_data(WI_ITS_2019_processed.ps)$plot, 1,1)) # Block is first number of plot #
+
+# add in the treatment numbers and metadata
+WI_ITS_2019_m.ps <- add_treatment_info(WI_ITS_2019_processed.ps, "WI") # m signifies metadata-added
+
+# fix taxonomy labels
+WI_ITS_2019_m.ps <- fix_its_taxa(WI_ITS_2019_m.ps)
+
+# final check and write out
+# sample_data(WI_ITS_2019_m.ps)
+saveRDS(WI_ITS_2019_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_metadata_added/WI_ITS_2019_m.ps")
+
+
+# 2020
+WI_ITS_2020_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_processed/WI_ITS_2020_processed.ps") # import ps
+# sample_data(WI_ITS_2020_processed.ps)
+
+# add season
+sample_data(WI_ITS_2020_processed.ps)$season <- ifelse(sample_data(WI_ITS_2020_processed.ps)$month == 5, "Spring",
+                                                       ifelse(sample_data(WI_ITS_2020_processed.ps)$month == 6, "Summer",
+                                                              ifelse(sample_data(WI_ITS_2020_processed.ps)$month == 11, "Fall", NA))) # add season as character
+# add block
+sample_data(WI_ITS_2020_processed.ps)$block <- as.numeric(substring(sample_data(WI_ITS_2020_processed.ps)$plot, 1,1)) # Block is first number of plot #
+
+# there are duplicate samples, naming messed up their metadata. fix:
+sample_data(WI_ITS_2020_processed.ps)[c(86,88,90),"year"] <- 20
+sample_data(WI_ITS_2020_processed.ps)[c(86,88,90),"month"] <- "11"
+sample_data(WI_ITS_2020_processed.ps)[c(86,88,90),"season"] <- "Fall"
+
+# add in the treatment numbers and metadata
+WI_ITS_2020_m.ps <- add_treatment_info(WI_ITS_2020_processed.ps, "WI") # m signifies metadata-added
+
+# fix taxonomy labels
+WI_ITS_2020_m.ps <- fix_its_taxa(WI_ITS_2020_m.ps)
+
+# final check and write out
+# sample_data(WI_ITS_2020_m.ps)
+saveRDS(WI_ITS_2020_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_metadata_added/WI_ITS_2020_m.ps")
+```
+
+#### Larkin (2019-2020)
+
+The one with all the dreaded anomalies. Note: Potatoes grown every
+year - each 3-yr rotation has three separate plots/block, each in
+different phase of rotation, so that one plot of every rotation
+treatment is in potato every year. Thus 3 plots for 3-yr, 2 plots for
+2-yr, etc. But to simplify, I put cover crop information in the same
+columns of the sample data as all the other states depending on rotation
+(2-yr cover is 2019 and 2021, 3-yr is 2020). Importing the metadata in
+one-step and it wasn’t nearly as much of a pain as I thought it would
+be.
+
+``` r
+# 2019
+US_ITS_2019_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_processed/larkin_ITS_2019_processed.ps") # import ps
+
+# inspect
+# sample_data(US_ITS_2019_processed.ps)
+
+# add season
+sample_data(US_ITS_2019_processed.ps)$season <- ifelse(sample_data(US_ITS_2019_processed.ps)$month == 6, "Spring",
+                                                       ifelse(sample_data(US_ITS_2019_processed.ps)$month == 8, "Summer",
+                                                              ifelse(sample_data(US_ITS_2019_processed.ps)$month == 10, "Fall", NA))) # add season as character
+# import everything including block
+see <- left_join(data.frame(sample_data(US_ITS_2019_processed.ps)), 
+                 larkin.decoder %>% select(-state), 
+                 by="plot") # merges the dataframes by plot, adding treatment info as well
+
+# rewrite the rotation in column two (rotation.x) with the latter one (rotation.y) and correct column names
+see$rotation.x <- see$rotation.y
+see <- see %>% select(-rotation.y)
+colnames(see)[3] <- "rotation"
+colnames(see)[15] <- "general_category"
+
+rownames(see) <- sample_names(US_ITS_2019_processed.ps) # add sample names to the dataframe
+all.equal(colnames(see), colnames(sample_data(WI_ITS_2019_m.ps))) # check to see the column names are the same as other ps objects
+```
+
+    ## [1] TRUE
+
+``` r
+sample_data(US_ITS_2019_processed.ps) <- see # write the new dataframe into the ps object
+US_ITS_2019_m.ps <- US_ITS_2019_processed.ps # new ps object
+
+# fix taxonomy labels
+US_ITS_2019_m.ps <- fix_its_taxa(US_ITS_2019_m.ps)
+
+# final check and write out
+# sample_data(US_ITS_2019_m.ps)
+saveRDS(US_ITS_2019_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_metadata_added/US_ITS_2019_m.ps")
+
+# 2020
+US_ITS_2020_processed.ps <- readRDS(file="/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_processed/larkin_ITS_2020_processed.ps") # import ps
+
+# inspect
+# sample_data(US_ITS_2020_processed.ps)
+
+# add season
+sample_data(US_ITS_2020_processed.ps)$season <- ifelse(sample_data(US_ITS_2020_processed.ps)$month == 5, "Spring",
+                                                       ifelse(sample_data(US_ITS_2020_processed.ps)$month == 7, "Summer",
+                                                              ifelse(sample_data(US_ITS_2020_processed.ps)$month == 10, "Fall", NA))) # add season as character
+# import everything including block
+see <- left_join(data.frame(sample_data(US_ITS_2020_processed.ps)), 
+                 larkin.decoder %>% select(-state), 
+                 by="plot") # merges the dataframes by plot, adding treatment info as well
+
+# rewrite the rotation in column two (rotation.x) with the latter one (rotation.y) and correct column names
+see$rotation.x <- see$rotation.y
+see <- see %>% select(-rotation.y)
+colnames(see)[3] <- "rotation"
+colnames(see)[15] <- "general_category"
+
+rownames(see) <- sample_names(US_ITS_2020_processed.ps) # add sample names to the dataframe
+all.equal(colnames(see), colnames(sample_data(WI_ITS_2020_m.ps))) # check to see the column names are the same as other ps objects
+```
+
+    ## [1] TRUE
+
+``` r
+sample_data(US_ITS_2020_processed.ps) <- see # write the new dataframe into the ps object
+US_ITS_2020_m.ps <- US_ITS_2020_processed.ps # new ps object
+
+# fix taxonomy labels
+US_ITS_2020_m.ps <- fix_its_taxa(US_ITS_2020_m.ps)
+
+# final check and write out
+# sample_data(US_ITS_2020_m.ps)
+saveRDS(US_ITS_2020_m.ps, "/Users/scottklasek/Desktop/UMN/phyloseqs/ITS_metadata_added/US_ITS_2020_m.ps")
+```
+
+### Conclusions
+
+It took a lot of time and effort but we did it! Imported and cleaned up
+that metadata
+
+#### session info
+
+``` r
+sessionInfo()
+```
+
+    ## R version 4.2.0 (2022-04-22)
+    ## Platform: x86_64-apple-darwin17.0 (64-bit)
+    ## Running under: macOS Big Sur/Monterey 10.16
+    ## 
+    ## Matrix products: default
+    ## BLAS:   /Library/Frameworks/R.framework/Versions/4.2/Resources/lib/libRblas.0.dylib
+    ## LAPACK: /Library/Frameworks/R.framework/Versions/4.2/Resources/lib/libRlapack.dylib
+    ## 
+    ## locale:
+    ## [1] en_US.UTF-8/en_US.UTF-8/en_US.UTF-8/C/en_US.UTF-8/en_US.UTF-8
+    ## 
+    ## attached base packages:
+    ## [1] stats     graphics  grDevices utils     datasets  methods   base     
+    ## 
+    ## other attached packages:
+    ##  [1] phyloseq_1.40.0 forcats_0.5.1   stringr_1.4.0   dplyr_1.0.9    
+    ##  [5] purrr_0.3.4     readr_2.1.2     tidyr_1.2.0     tibble_3.1.7   
+    ##  [9] ggplot2_3.3.6   tidyverse_1.3.1
+    ## 
+    ## loaded via a namespace (and not attached):
+    ##  [1] nlme_3.1-157           bitops_1.0-7           fs_1.5.2              
+    ##  [4] lubridate_1.8.0        httr_1.4.3             GenomeInfoDb_1.32.1   
+    ##  [7] tools_4.2.0            backports_1.4.1        vegan_2.6-2           
+    ## [10] utf8_1.2.2             R6_2.5.1               mgcv_1.8-40           
+    ## [13] DBI_1.1.2              BiocGenerics_0.42.0    colorspace_2.0-3      
+    ## [16] permute_0.9-7          rhdf5filters_1.8.0     ade4_1.7-19           
+    ## [19] withr_2.5.0            tidyselect_1.1.2       compiler_4.2.0        
+    ## [22] cli_3.3.0              rvest_1.0.2            Biobase_2.56.0        
+    ## [25] xml2_1.3.3             scales_1.2.0           digest_0.6.29         
+    ## [28] rmarkdown_2.14         XVector_0.36.0         pkgconfig_2.0.3       
+    ## [31] htmltools_0.5.2        dbplyr_2.1.1           fastmap_1.1.0         
+    ## [34] rlang_1.0.2            readxl_1.4.0           rstudioapi_0.13       
+    ## [37] generics_0.1.2         jsonlite_1.8.0         RCurl_1.98-1.6        
+    ## [40] magrittr_2.0.3         GenomeInfoDbData_1.2.8 biomformat_1.24.0     
+    ## [43] Matrix_1.4-1           Rcpp_1.0.8.3           munsell_0.5.0         
+    ## [46] S4Vectors_0.34.0       Rhdf5lib_1.18.0        fansi_1.0.3           
+    ## [49] ape_5.6-2              lifecycle_1.0.1        stringi_1.7.6         
+    ## [52] yaml_2.3.5             MASS_7.3-56            zlibbioc_1.42.0       
+    ## [55] rhdf5_2.40.0           plyr_1.8.7             grid_4.2.0            
+    ## [58] parallel_4.2.0         crayon_1.5.1           lattice_0.20-45       
+    ## [61] splines_4.2.0          Biostrings_2.64.0      haven_2.5.0           
+    ## [64] multtest_2.52.0        hms_1.1.1              knitr_1.39            
+    ## [67] pillar_1.7.0           igraph_1.3.1           reshape2_1.4.4        
+    ## [70] codetools_0.2-18       stats4_4.2.0           reprex_2.0.1          
+    ## [73] glue_1.6.2             evaluate_0.15          data.table_1.14.2     
+    ## [76] modelr_0.1.8           vctrs_0.4.1            tzdb_0.3.0            
+    ## [79] foreach_1.5.2          cellranger_1.1.0       gtable_0.3.0          
+    ## [82] assertthat_0.2.1       xfun_0.31              broom_0.8.0           
+    ## [85] survival_3.3-1         iterators_1.0.14       IRanges_2.30.0        
+    ## [88] cluster_2.1.3          ellipsis_0.3.2

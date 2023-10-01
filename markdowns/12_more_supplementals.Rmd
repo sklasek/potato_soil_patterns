@@ -1,0 +1,247 @@
+---
+title: "Reviewables"
+author: "Scott Klasek"
+date: "2023-09-13"
+output: github_document
+---
+### Purpose
+Revisit some data relating to reviewer comments on Potato Soil Core Microbiomes manuscript (first two years). 
+
+#### load libraries
+```{r}
+packages <- c("tidyverse", "phyloseq", "speedyseq", "patchwork", "NatParksPalettes", "UpSetR", "scales", "grid", "gridExtra", "cowplot")
+t <- lapply(packages, require, character.only = TRUE) # load all packages at once
+```
+
+#### load data
+```{r}
+jimdata <- read_csv(file = "/Users/klas0061/Desktop/UMN/jim_info/PSHP_ALL_obj_1_all_data_2023_06_13.csv")
+view(jimdata)
+
+# entire communities
+bact.ps <- readRDS(file = "/Users/klas0061/Desktop/UMN/phyloseqs/first_two_years_all_sites/bact1920.cleaned.ps")
+euks.ps <- readRDS(file = "/Users/klas0061/Desktop/UMN/phyloseqs/first_two_years_all_sites/fung1920.cleaned.ps")
+
+# core communities - last col of otu table is "summing", all its tax categories are also "summing"
+bact.core.ps <- readRDS(file = "/Users/klas0061/Desktop/UMN/phyloseqs/core/core.bact.asvs.ps")
+euks.core.ps <- readRDS(file = "/Users/klas0061/Desktop/UMN/phyloseqs/core/core.its.asvs.ps")
+
+# asvcumulate results with number of states the ASVs were observed in 
+bact.asvc <- read_csv(file = "/Users/klas0061/Desktop/UMN/figures/from_server/16s.asvcumulate.csv")
+euks.asvc <- read_csv(file = "/Users/klas0061/Desktop/UMN/figures/from_server/ITS.ASVs.asvc")
+```
+
+#### define functions
+```{r}
+# merge.and.tidy.samples takes a ps object, groups samples by replicates according to phyloseq::merge_samples, 
+# then calculate percent abundances, and fix state labels
+merge.and.tidy.samples <- function(ps){
+
+  # assign repgroup for each set of communities that can be considered a "replicate"
+  sample.df <- data.frame(ps@sam_data)
+  sample.df.us <- sample.df %>% filter(state=="US")
+  sample.df.rest <- sample.df %>% filter(state!="US")
+  
+  # previously added sample.df.us$treatment_new to separate US samples by treatment, but found it didn't matter much and could be an unnecessary distraction/tangent. 
+  sample.df.us$repgroup <- paste(sample.df.us$state, sample.df.us$year, sample.df.us$season, sep = "") 
+  sample.df.rest$repgroup <- paste(sample.df.rest$state, sample.df.rest$year, sample.df.rest$season, sep = "")
+  sample.df <- rbind(sample.df.rest, sample.df.us)
+  sample_data(ps) <- sample.df
+  
+  # merge samples by repgroup
+  ps.grouped <- merge_samples(ps, "repgroup")
+  
+  # re-add state names because merge_samples decided to omit them all
+  sample_data(ps.grouped)$state <- str_sub(rownames(sample_data(ps.grouped)), 1, 2)
+  
+  # transform to percent abundances
+  ps.grouped <- transform_sample_counts(ps.grouped, function(OTU) 100*OTU/sum(OTU))
+  
+  # redo state factoring
+  ps.grouped@sam_data$state <- factor(ps.grouped@sam_data$state, levels = c("OR", "ID", "CO", "MN", "ND", "WI", "MI", "ME", "US"),
+                                      labels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2"))
+  return(ps.grouped)
+}
+
+# remove summing columns from core ps objects
+prune_sums <- function(ps){
+  keep.taxa.names <- taxa_names(ps)[which(taxa_names(ps) != "summing")]
+  prune.ps <- prune_taxa(keep.taxa.names, ps)
+  return(prune.ps)
+}
+
+# prune all but most abundant n classes
+take.top.classes <- function(ps, nclasses){
+  asvs.of.classes.descending <- names(sort(colSums(ps@otu_table) / nrow(ps@otu_table), decreasing = TRUE)) # the representative ASVs of classes
+  cla <- data.frame(ps@tax_table)[asvs.of.classes.descending,]$Class # their corresponding classes, in order of descending abundance
+  cat("these classes are selected: ", cla[1:nclasses], "\n") # lists the classes 
+  ps.pruned <- prune_taxa(asvs.of.classes.descending[1:nclasses], ps) # prunes all but the top n classes from the ps object
+  return(ps.pruned)
+}
+```
+
+
+### Do other soil chemical, physical measurements vary by state, and if so, are they worth mentioning?
+```{r}
+jimdata %>% 
+  select(State, `Ca (ppm)`, `Mg (ppm)`, `Na (ppm)`, `Zn (ppm)`) %>% 
+  mutate_at(c("Ca (ppm)", "Mg (ppm)", "Na (ppm)", "Zn (ppm)"), as.numeric) %>% 
+  pivot_longer(!State, values_to = "value", names_to = "chem") %>% 
+  ggplot(aes(State, value))+geom_violin()+facet_grid(chem~., scales = "free")
+```
+
+### You want Class? I'll give you Class
+As in, plotting the top Class-level taxonomy for the full and the core 16S and ITS microbiomes. 
+```{r}
+# make a list of phyloseq objects
+ps.list <- list(bact.ps, euks.ps, bact.core.ps, euks.core.ps)
+names(ps.list) <- c("all.bact", "all.euks", "core.bact", "core.euks")
+
+# tax-glom to class, transform to percent abundance, omit low-abundance phyla
+classglom.ps.list <- lapply(ps.list, tax_glom, taxrank = "Class")
+
+# run this to merge samples by replicates, calculate percent abundances, and fix state labels
+mtcglom.ps.list <- suppressWarnings(lapply(classglom.ps.list, merge.and.tidy.samples)) # Warning: NAs introduced by coercion but its ok
+
+# remove "summing" columns from core phyloseq objects
+core.bact.pruned <- prune_sums(mtcglom.ps.list[["core.bact"]])
+core.euks.pruned <- prune_sums(mtcglom.ps.list[["core.euks"]])
+
+# prune all but most n abundant Classes
+top.c.all.bact <- take.top.classes(mtcglom.ps.list[["all.bact"]], 10)
+top.c.core.bact <- take.top.classes(core.bact.pruned, 10)
+top.c.all.euks <- take.top.classes(mtcglom.ps.list[["all.euks"]], 10)
+top.c.core.euks <- take.top.classes(core.euks.pruned, 10)
+```
+
+#### Bacteria at class-level
+```{r}
+# all bacteria
+keep.these <- sample_names(top.c.all.bact)[which(!is.na(data.frame(top.c.all.bact@sam_data)$state))] # prune a few state NAs
+ca <- prune_samples(keep.these, top.c.all.bact) %>% 
+        plot_bar(fill = "Class")+ 
+         geom_bar(stat="identity", position="stack")+ 
+         scale_y_continuous("")+
+         scale_x_discrete("")+
+         scale_fill_manual("Class", values = natparks.pals("Torres", 12)[c(2:8,10:12)])+
+         facet_grid(~factor(state, levels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2")), scales = "free", space = "free")+
+         ggtitle("A")+theme_bw()+
+         theme(axis.text.x = element_blank(), legend.position = "none", axis.ticks.x = element_blank())
+
+# core bacteria
+keep.these <- sample_names(top.c.core.bact)[which(!is.na(data.frame(top.c.core.bact@sam_data)$state))] # prune a few state NAs
+cb <- prune_samples(keep.these, top.c.core.bact) %>% 
+        plot_bar(fill = "Class")+ 
+         geom_bar(stat="identity", position="stack")+
+          scale_y_continuous("", limits = c(0,20))+ 
+          scale_x_discrete("")+
+          scale_fill_manual("Class", values = natparks.pals("Torres", 12)[c(1:10)])+
+          facet_grid(~factor(state, levels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2")), scales = "free", space = "free")+
+          ggtitle("B")+theme_bw()+
+          theme(axis.text.x = element_blank(), legend.position = "none", axis.ticks.x = element_blank())
+
+# combine bacterial legend
+bact.for.legend <- take.top.classes(mtcglom.ps.list[["all.bact"]], 15) # want all these classes, except Chloroflexia, Ktedo, and Polyangia
+keep.taxa.names <- taxa_names(bact.for.legend)[!(taxa_names(bact.for.legend) %in% c("ASV105058", "ASV146159", "ASV198"))] # which correspond to these ASV names
+
+bact.for.legend <- prune_taxa(keep.taxa.names, bact.for.legend) # remove the offending taxa
+view(bact.for.legend@tax_table)
+
+bact.legend <- plot_bar(bact.for.legend, fill="Class")+ # make a dummy plot
+   geom_bar(stat="identity", position="stack")+ 
+   scale_fill_manual("Class", values = natparks.pals("Torres", 12))+
+   theme(axis.text.x = element_blank())
+bact.legend <- get_legend(bact.legend) # extract its legend
+
+# plot bacteria 
+bact.class <- ((ca / cb + plot_layout(heights = c(2,1))) | bact.legend) + plot_layout(widths = c(3,1)) # specify proportions
+bact.class
+grid::grid.draw(grid::textGrob("Percent abundance", x = 0.02, rot = 90)) # add in a common y-axis label
+```
+
+#### Eukaryotes at class-level
+```{r}
+# all euks
+keep.these <- sample_names(top.c.all.euks)[which(!is.na(data.frame(top.c.all.euks@sam_data)$state))] # prune a few state NAs
+cc <- prune_samples(keep.these, top.c.all.euks) %>% 
+        plot_bar(fill = "Class")+ 
+         geom_bar(stat="identity", position="stack")+ 
+         scale_y_continuous("")+
+         scale_x_discrete("")+
+         scale_fill_manual("Class", values = natparks.pals("DeathValley", 11)[c(1:7,9:11)])+
+         facet_grid(~factor(state, levels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2")), scales = "free", space = "free")+
+         ggtitle("C")+theme_bw()+
+         theme(axis.text.x = element_blank(), legend.position = "none", axis.ticks.x = element_blank())
+
+# core euks
+keep.these <- sample_names(top.c.core.euks)[which(!is.na(data.frame(top.c.core.euks@sam_data)$state))] # prune a few state NAs
+cd <- prune_samples(keep.these, top.c.core.euks) %>% 
+        plot_bar(fill = "Class")+ 
+         geom_bar(stat="identity", position="stack")+
+          scale_y_continuous("", limits = c(0,60))+ 
+          scale_x_discrete("")+
+          scale_fill_manual("Class", values = natparks.pals("DeathValley", 11)[c(1:2,4:11)])+
+          facet_grid(~factor(state, levels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2")), scales = "free", space = "free")+
+          ggtitle("D")+theme_bw()+
+          theme(axis.text.x = element_blank(), legend.position = "none", axis.ticks.x = element_blank())
+
+# combine euk legend
+euks.for.legend <- take.top.classes(mtcglom.ps.list[["all.euks"]], 15) # want all these classes, except Treboux, Spizello, Lobulo, and Spiro.
+keep.taxa.names <- taxa_names(euks.for.legend)[!(taxa_names(euks.for.legend) %in% c("ASV5313", "ASV1449", "ASV3508", "ASV317"))] # which correspond to these ASV names
+euks.for.legend <- prune_taxa(keep.taxa.names, euks.for.legend) # remove the offending taxa
+euks.legend <- plot_bar(euks.for.legend, fill="Class")+ # make a dummy plot
+   geom_bar(stat="identity", position="stack")+ 
+   scale_fill_manual("Class", values = natparks.pals("DeathValley", 11))+
+   theme(axis.text.x = element_blank())
+euks.legend <- get_legend(euks.legend) # extract its legend
+
+# plot euks
+euks.class <- ((cc / cd + plot_layout(heights = c(1,0.7))) | euks.legend) + plot_layout(widths = c(3, 1)) # specify proportions
+euks.class
+grid::grid.draw(grid::textGrob("Percent abundance", x = 0.02, rot = 90)) # add in a common y-axis label
+```
+
+### Occupancy (num states) and abundance
+Just to scratch the surface enough to address reviewer concerns about sequence depth. 
+```{r}
+# plot mean occupancy and number of states each ASV was detected in 
+bact.state <- ggplot(bact.asvc, aes(num_states_per_asv_test, log10(pctreads), 
+                       fill = as.factor(as.numeric(num_states_per_asv_test))))+geom_violin()+
+  scale_y_continuous("log10 mean % abundance", limits = c(-5,1))+
+  scale_x_continuous("", breaks = c(1:9))+
+  scale_fill_manual(values = natparks.pals("Acadia", 9))+
+  theme_bw()+theme(legend.position = "none")+ggtitle("A")
+
+euks.state <- ggplot(euks.asvc, aes(num_states_per_asv_test, log10(pctreads), 
+                       fill = as.factor(as.numeric(num_states_per_asv_test))))+geom_violin()+
+  scale_y_continuous("", limits = c(-5,1))+
+  scale_x_continuous("", breaks = c(1:9))+
+  scale_fill_manual(values = natparks.pals("Acadia", 9))+
+  theme_bw()+theme(legend.position = "none")+ggtitle("B")
+
+# numbers of ASVs across each state since I didn't even show those earlier
+bact.count <- ggplot(bact.asvc %>% count(num_states_per_asv_test), aes(num_states_per_asv_test, log10(n), 
+                       color = as.factor(as.numeric(num_states_per_asv_test))))+
+  geom_point()+
+  scale_y_continuous("log10 ASV count", limits = c(2,6))+
+  scale_x_continuous("", breaks = c(1:9))+
+  scale_color_manual(values = natparks.pals("Acadia", 9))+
+  theme_bw()+theme(legend.position = "none")+ggtitle("C")
+
+euks.count <- ggplot(euks.asvc %>% count(num_states_per_asv_test), aes(num_states_per_asv_test, log10(n), 
+                       color = as.factor(as.numeric(num_states_per_asv_test))))+
+  geom_point()+
+  scale_y_continuous("", limits = c(1,5))+
+  scale_x_continuous("", breaks = c(1:9))+
+  scale_color_manual(values = natparks.pals("Acadia", 9))+
+  theme_bw()+theme(legend.position = "none")+ggtitle("D")
+
+(bact.state + euks.state) / (bact.count + euks.count) + plot_layout(heights = c(2, 1))
+grid::grid.draw(grid::textGrob("Number of sites an ASV was found in", x = 0.5, y = 0.05, rot = 0))
+```
+A- Bacteria, B- Eukaryotes. ASVs with three reads or less in the entire dataset are omitted from this plot, as they are cut off at y < -5. 34M and 31M reads in the bacterial and eukaryotic phyloseqs respectively. 
+
+#### session info
+```{r}
+sessionInfo()
+```

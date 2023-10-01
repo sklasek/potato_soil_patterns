@@ -1,0 +1,297 @@
+---
+title: "24_taxonomy_II"
+output: github_document
+date: "2023-02-24"
+---
+#### Purpose   
+Make better plots of taxa and core taxa for 16S and ITS at the Phylum level, and plot variation of top core taxa across states. 
+
+#### load libraries
+```{r}
+packages <- c("tidyverse", "phyloseq", "speedyseq", "patchwork", "NatParksPalettes", "UpSetR", "scales", "grid", "gridExtra", "cowplot")
+t <- lapply(packages, require, character.only = TRUE) # load all packages at once
+```
+
+#### load previously made phyloseq objects, number the ASVs, and dump them into a list  
+```{r}
+# communities-all
+bact.ps <- readRDS(file="/Users/klas0061/Desktop/UMN/phyloseqs/first_two_years_all_sites/bact1920.cleaned.ps")
+euks.ps <- readRDS(file="/Users/klas0061/Desktop/UMN/phyloseqs/first_two_years_all_sites/fung1920.cleaned.ps")
+
+# number_asvs assigns ASV numbers to replace the sequences as the rownames. takes only a ps object
+number_asvs <- function(ps){
+  dna <- Biostrings::DNAStringSet(taxa_names(ps))
+  names(dna) <- taxa_names(ps)
+  ps <- merge_phyloseq(ps, dna)
+  taxa_names(ps) <- paste0("ASV", seq(ntaxa(ps)))
+  return(ps)
+}
+# number bact and euk ASVs IF NECESSARY
+# bact.ps <- number_asvs(bact.ps) 
+# euks.ps <- number_asvs(euks.ps)
+
+# core communities - last col of otu table is "summing", all its tax categories are also "summing"
+bact.core.ps <- readRDS(file = "/Users/klas0061/Desktop/UMN/phyloseqs/core/core.bact.asvs.ps")
+euks.core.ps <- readRDS(file = "/Users/klas0061/Desktop/UMN/phyloseqs/core/core.its.asvs.ps")
+
+# make a list
+ps.list <- list(bact.ps, euks.ps, bact.core.ps, euks.core.ps)
+names(ps.list) <- c("all.bact", "all.euks", "core.bact", "core.euks")
+```
+
+#### tax-glom to Phylum, transform to percent abundance, omit low-abundance phyla
+```{r}
+# glom at phylum level
+phyglom.ps.list <- lapply(ps.list, tax_glom, taxrank = "Phylum")
+
+# merge.and.tidy.samples takes a ps object, groups samples by replicates according to phyloseq::merge_samples, 
+# then calculate percent abundances, and fix state labels
+merge.and.tidy.samples <- function(ps){
+
+  # assign repgroup for each set of communities that can be considered a "replicate"
+  sample.df <- data.frame(ps@sam_data)
+  sample.df.us <- sample.df %>% filter(state=="US")
+  sample.df.rest <- sample.df %>% filter(state!="US")
+  
+  # previously added sample.df.us$treatment_new to separate US samples by treatment, but found it didn't matter much and could be an unnecessary distraction/tangent. 
+  sample.df.us$repgroup <- paste(sample.df.us$state, sample.df.us$year, sample.df.us$season, sep = "") 
+  sample.df.rest$repgroup <- paste(sample.df.rest$state, sample.df.rest$year, sample.df.rest$season, sep = "")
+  sample.df <- rbind(sample.df.rest, sample.df.us)
+  sample_data(ps) <- sample.df
+  
+  # merge samples by repgroup
+  ps.grouped <- merge_samples(ps, "repgroup")
+  
+  # re-add state names because merge_samples decided to omit them all
+  sample_data(ps.grouped)$state <- str_sub(rownames(sample_data(ps.grouped)), 1, 2)
+  
+  # transform to percent abundances
+  ps.grouped <- transform_sample_counts(ps.grouped, function(OTU) 100*OTU/sum(OTU))
+  
+  # redo state factoring
+  ps.grouped@sam_data$state <- factor(ps.grouped@sam_data$state, levels = c("OR", "ID", "CO", "MN", "ND", "WI", "MI", "ME", "US"),
+                                      labels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2"))
+  return(ps.grouped)
+}
+
+# run this to merge samples by replicates, calculate percent abundances, and fix state labels
+mtphyglom.ps.list <- lapply(phyglom.ps.list, merge.and.tidy.samples) 
+
+# remove summing columns from core ps objects
+prune_sums <- function(ps){
+  keep.taxa.names <- taxa_names(ps)[which(taxa_names(ps) != "summing")]
+  prune.ps <- prune_taxa(keep.taxa.names, ps)
+  return(prune.ps)
+}
+core.bact.pruned <- prune_sums(mtphyglom.ps.list[["core.bact"]])
+core.euks.pruned <- prune_sums(mtphyglom.ps.list[["core.euks"]])
+
+# prune all but most abundant n phyla
+take.top.phyla <- function(ps, nphyla){
+  asvs.of.phyla.descending <- names(sort(colSums(ps@otu_table) / nrow(ps@otu_table), decreasing = TRUE)) # the representative ASVs of phyla
+  phy <- data.frame(ps@tax_table)[asvs.of.phyla.descending,]$Phylum # their corresponding phyla, in order of descending abundance
+  cat("these phyla are selected: ", phy[1:nphyla], "\n") # lists the phyla 
+  ps.pruned <- prune_taxa(asvs.of.phyla.descending[1:nphyla], ps) # prunes all but the top n phyla from the ps object
+  return(ps.pruned)
+}
+top.phy.all.bact <- take.top.phyla(mtphyglom.ps.list[["all.bact"]], 10)
+top.phy.core.bact <- take.top.phyla(core.bact.pruned, 10)
+top.phy.all.euks <- take.top.phyla(mtphyglom.ps.list[["all.euks"]], 10)
+top.phy.core.euks <- take.top.phyla(core.euks.pruned, 9) # there were only 9 core eukaryotic phyla
+length(data.frame(core.euks.pruned@tax_table)$Phylum)
+```
+
+#### barplots of total communities, by phylum
+```{r}
+# all bacteria
+keep.these <- sample_names(top.phy.all.bact)[which(!is.na(data.frame(top.phy.all.bact@sam_data)$state))] # prune a few state NAs
+top.phy.all.bact <- prune_samples(keep.these, top.phy.all.bact)
+all.bact.bar <- plot_bar(top.phy.all.bact, fill="Phylum")+
+   geom_bar(stat="identity", position="stack")+ 
+   scale_y_continuous("")+
+   scale_x_discrete("")+
+   scale_fill_manual("Phylum", values = natparks.pals("Torres", 12)[c(1:6,8,10:12)])+
+   facet_grid(~factor(state, levels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2")), scales = "free", space = "free")+
+   ggtitle("A")+theme_bw()+
+   theme(axis.text.x = element_blank(), legend.position = "none", axis.ticks.x = element_blank())
+
+# all euks
+keep.these <- sample_names(top.phy.all.euks)[which(!is.na(data.frame(top.phy.all.euks@sam_data)$state))] # prune a few state NAs
+top.phy.all.euks <- prune_samples(keep.these, top.phy.all.euks)
+all.euks.bar <- plot_bar(top.phy.all.euks, fill="Phylum")+
+   geom_bar(stat="identity", position="stack")+ 
+   scale_y_continuous("")+
+   scale_x_discrete("")+
+   scale_fill_manual("Phylum", values = natparks.pals("DeathValley", 11)[c(1:7, 9:11)])+
+   facet_grid(~factor(state, levels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2")), scales = "free", space = "free")+
+   ggtitle("C")+theme_bw()+
+   theme(axis.text.x = element_blank(), legend.position = "none", axis.ticks.x = element_blank())
+```
+
+#### barplots of core communities, by phylum
+```{r}
+# core bacteria
+keep.these <- sample_names(top.phy.core.bact)[which(!is.na(data.frame(top.phy.core.bact@sam_data)$state))] # prune a few state NAs
+top.phy.core.bact <- prune_samples(keep.these, top.phy.core.bact)
+core.bact.bar <- plot_bar(top.phy.core.bact, fill="Phylum")+
+   geom_bar(stat="identity", position="stack")+ 
+   scale_y_continuous("", limits = c(0,20))+ 
+   scale_x_discrete("")+
+   scale_fill_manual("Phylum", values = natparks.pals("Torres", 12)[c(1:9, 11)])+
+   facet_grid(~factor(state, levels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2")), scales = "free", space = "free")+
+   ggtitle("B")+theme_bw()+
+   theme(axis.text.x = element_blank(), legend.position = "none", axis.ticks.x = element_blank())
+
+# core euks
+keep.these <- sample_names(top.phy.core.euks)[which(!is.na(data.frame(top.phy.core.euks@sam_data)$state))] # prune a few state NAs
+top.phy.core.euks <- prune_samples(keep.these, top.phy.core.euks)
+core.euks.bar <- plot_bar(top.phy.core.euks, fill="Phylum")+
+   geom_bar(stat="identity", position="stack")+ 
+   scale_y_continuous("")+
+   scale_x_discrete("")+
+   scale_fill_manual("Phylum", values = natparks.pals("DeathValley", 11)[c(2,3,5:11)])+
+   facet_grid(~factor(state, levels = c("OR", "ID", "CO", "MN1", "MN2", "WI", "MI", "ME1", "ME2")), scales = "free", space = "free")+
+   ggtitle("D")+theme_bw()+
+   theme(axis.text.x = element_blank(), legend.position = "none", axis.ticks.x = element_blank())
+```
+
+#### Attempt to smush all plots together 
+combining the color legend in patchwork as shown below gives two legends, when I want one combined one. Solution is probably to make a dummy legend and add it as a separate plot element... 
+```{r}
+# get bacterial combined legend
+take.top.phyla(mtphyglom.ps.list[["all.bact"]], 15)@tax_table
+bact.for.legend <- take.top.phyla(mtphyglom.ps.list[["all.bact"]], 15) # want all these phyla, except Patescibacteria, Bdellovibrionota, and Latescibacterota
+keep.taxa.names <- taxa_names(bact.for.legend)[!(taxa_names(bact.for.legend) %in% c("ASV40003", "ASV1791", "ASV2178"))] # which correspond to these ASV names
+
+bact.for.legend <- prune_taxa(keep.taxa.names, bact.for.legend) # remove the offending taxa
+bact.legend <- plot_bar(bact.for.legend, fill="Phylum")+ # make a dummy plot
+   geom_bar(stat="identity", position="stack")+ 
+   scale_fill_manual("Phylum", values = natparks.pals("Torres", 12))+
+   theme(axis.text.x = element_blank())
+bact.legend <- get_legend(bact.legend) # extract its legend
+
+# plot bacteria 
+bact.phyla <- ((all.bact.bar / core.bact.bar + plot_layout(heights = c(2,1))) | bact.legend) + plot_layout(widths = c(3,1)) # specify proportions
+bact.phyla
+grid::grid.draw(grid::textGrob("Percent abundance", x = 0.02, rot = 90)) # add in a common y-axis label
+
+# get euk combined legend
+take.top.phyla(mtphyglom.ps.list[["all.euks"]], 14)@tax_table
+euks.for.legend <- take.top.phyla(mtphyglom.ps.list[["all.euks"]], 14) # want all these phyla, except three: Heterolobosa_phy_Incertae_sedis, Blastocladiomycota, Cercozoa
+keep.taxa.names <- taxa_names(euks.for.legend)[!(taxa_names(euks.for.legend) %in% c("ASV139", "ASV3346", "ASV76"))]
+euks.for.legend <- prune_taxa(keep.taxa.names, euks.for.legend) # remove the offending taxa
+euks.legend <- plot_bar(euks.for.legend, fill="Phylum")+ # make a dummy plot
+   geom_bar(stat="identity", position="stack")+ 
+   scale_fill_manual("Phylum", values = natparks.pals("DeathValley", 11))+
+   theme(axis.text.x = element_blank())
+euks.legend <- get_legend(euks.legend) # extract its legend
+
+# plot euks
+euks.phyla <- ((all.euks.bar / core.euks.bar + plot_layout(heights = c(1,0.7))) | euks.legend) + plot_layout(widths = c(3,1)) # specify proportions
+euks.phyla 
+grid::grid.draw(grid::textGrob("Percent abundance", x = 0.02, rot = 90)) # add in a common y-axis label
+
+# ALL together: too unstable, can't adjust proportions with plot_layout for some reason
+# (all.bact.bar / core.bact.bar | bact.legend) / (all.euks.bar / core.euks.bar | euks.legend)
+# grid::grid.draw(grid::textGrob("Percent abundance", x = 0.015, rot = 90)) # add in a common y-axis label
+```
+I also had issues with the pdf barplots made as outputs: the colors of the final figures were way darker than they looked within RStudio. 
+
+#### Plotting a few examples of differentially abundant ASVs from differentially abundant genera across states
+I ran aldex and the results basically said: everything is differentially abundant. Well ok, all core ITS ASVs and genera they belong to are, but only 93% of core bacterial ASVs and 96% of genera they belong to. The most illustrative examples of this are Mortierella in the fungi, and Bacillus in the bacteria, as they are both highly abundant genera with many core ASVs that all happen to be differentially abundant across sites. They're also implicated in plant health and growth promotion. 
+
+I also realized what was wrong with my barplots. Since you can't reduce the thin black outlines of the bars any more than I already have, better to merge_samples that are considered "replicates". This is like 24-30 communities per barplot in all sites except for ME2, where there are 5 communities per barplot.  
+
+```{r}
+ps.euks <- merge.and.tidy.samples(euks.core.ps) # merge and tidy the samples by site/year/season & transform into percent abundances
+biomarkerlist <- rownames(data.frame(ps.euks@tax_table) %>% filter(Genus == "Mortierella")) # get the core Mortierella ASVs 
+colSums(ps.euks@otu_table[,biomarkerlist])/nsamples(ps.euks) # look at their mean percent abundances
+biomarkerlist <- c("ASV17", "ASV516", "ASV878") # that M. polygonia is too low percent abundance to be visible
+
+# stuff from the function
+num <- vector("numeric") # define a numeric vector
+  for (i in biomarkerlist) {num[i] <- mean(otu_table(ps.euks)[,i])} # calculate mean percent abundances for all biomarker ASVs
+  asvs.to.subset <- vector("integer") # define an integer vector
+  for (i in names(num)) {asvs.to.subset[i] <- which(rownames(tax_table(ps.euks))==i)} # obtains the row numbers corresponding to biomarker ASVs
+  bmtt <- tax_table(ps.euks)[asvs.to.subset,] # subsets the tax table
+  bmtt[,"Species"] <- paste("M.", bmtt[,"Species"])
+  bmasvt <- otu_table(ps.euks)[,names(num)] # subsets the ASV table
+  ps.bm <- phyloseq(tax_table(bmtt), 
+                 sample_data(ps.euks),
+                 otu_table(bmasvt, taxa_are_rows = FALSE)) # writes subsetted files into a phyloseq object
+mort.barplot <- plot_bar(ps.bm, fill="Species")+
+  geom_bar(stat="identity", position="stack", color = NA)+
+  scale_y_continuous("% Abundance")+
+  facet_grid(~state, scales = "free", space = "free")+
+  scale_fill_manual("", values = c('#fc8d62','#8da0cb','#66c2a5'))+ # M. polygonia was '#e78ac3'  
+  scale_x_discrete("")+ggtitle("B")+theme_bw()+
+  theme(axis.text.x = element_blank(), legend.position = "bottom", axis.ticks.x = element_blank()) # bar graphs % abundances across all samples
+
+### next Bacillus
+ps.bact <- merge.and.tidy.samples(bact.core.ps)
+biomarkerlist <- rownames(data.frame(ps.bact@tax_table) %>% filter(Genus == "Bacillus"))
+omit.samples <- c("tech_rep_1_16S_S1460", "tech_rep_2_16S_S1461", "tech_rep_3_16S_S1462", "OR_1_Compost_10_19_16S_S1299", "OR_1_2_blank_20_4_16S_S1039", "OR_1_2_blank_20_6_16S_S1040", "OR_1_3_blank_20_8_16S_S1065")
+ps <- prune_samples(setdiff(sample_names(ps.bact), omit.samples), ps.bact)
+
+bacillus.mean.pa <- colSums(ps@otu_table[,biomarkerlist])/nsamples(ps) # look at their mean percent abundances
+sort(bacillus.mean.pa, decreasing = TRUE)
+biomarkerlist <- names(sort(bacillus.mean.pa, decreasing = TRUE)[1:4]) # just take the top n
+
+# stuff from the function
+num <- vector("numeric") # define a numeric vector
+  for (i in biomarkerlist) {num[i] <- mean(otu_table(ps)[,i])} # calculate mean percent abundances for all biomarker ASVs
+  asvs.to.subset <- vector("integer") # define an integer vector
+  for (i in names(num)) {asvs.to.subset[i] <- which(rownames(tax_table(ps))==i)} # obtains the row numbers corresponding to biomarker ASVs
+  bmtt <- tax_table(ps)[asvs.to.subset,] # subsets the tax table
+  bmtt.df <- data.frame(bmtt)
+  bmtt.df$ASV <- rownames(bmtt.df)
+  bmtt.df$Label <- paste(bmtt.df$Genus, bmtt.df$ASV)
+  # bmtt.df$Label[1] <- "Bacillus niacini ASV14131" # now I don't have B. niacini anymore
+  bmtt <- as.matrix(bmtt.df)
+  bmasvt <- otu_table(ps)[,names(num)] # subsets the ASV table
+  ps.bm <- phyloseq(tax_table(bmtt), 
+                 sample_data(ps),
+                 otu_table(bmasvt, taxa_are_rows = FALSE)) # writes subsetted files into a phyloseq object
+bac.barplot <- plot_bar(ps.bm, fill="Label")+
+  geom_bar(stat="identity", position="stack", color = NA)+
+  scale_y_continuous("% Abundance", breaks = c(0, 1, 2))+
+  facet_grid(~state, scales = "free", space = "free")+
+  scale_fill_manual("", values = natparks.pals("Volcanoes", 6)[c(2,5,3,4)])+  
+  scale_x_discrete("")+ggtitle("A")+theme_bw()+
+  theme(axis.text.x = element_blank(), legend.position = "none", axis.ticks.x = element_blank())
+
+bac.barplot / mort.barplot
+```
+Notes on color legend for A, Bacillus: I used only the top four ASVs, none of which had species names. Lowest percent abundance of this one was 0.08%, and the top one omitted was 0.03%.  You can now actually see the colors because there aren't over a thousand barplots, and the replicate-averaged bars remove any outlier communities. For the most part these spatially-variable populations are pretty stable over year/season with maybe a couple exceptions (like OR, WI M. elongata vs hyalina). 
+
+#### notes about aldex diff abundance 
+I ran the tax-glommed differential abundance calculations by state interactively, using the code below. Not running here cuz it took a long time and once was enough. 
+```{r eval=FALSE}
+# core its asvs genus-glommed- started 5:18, went on run, finished within an hour
+core.its.g <- tax_glom(core.its.asvs.ps, taxrank = "Genus")
+table(core.its.g@sam_data$state) # there should just be the nine sites
+ald.its <- aldex.clr(data.frame(t(core.its.g@otu_table)), core.its.g@sam_data$state, mc.samples = 128, verbose = FALSE, useMC=TRUE) # do NOT print output
+ald.its.kw <- aldex.kw(ald.its, useMC = TRUE, verbose = FALSE) # this takes a while 
+write.csv(ald.its.kw, file = "/Users/scottklasek/Desktop/aldex.kw.core.its.genus.glom.csv")
+# core.its.g@tax_table
+
+# core bact asvs genus-glommed- started 6:19 
+core.bact.g <- tax_glom(core.bact.asvs.ps, taxrank = "Genus")
+table(core.bact.g@sam_data$state) # there should just be the nine sites
+ald.bact <- aldex.clr(data.frame(t(core.bact.g@otu_table)), core.bact.g@sam_data$state, mc.samples = 128, verbose = FALSE, useMC=TRUE) # do NOT print output
+ald.bact.kw <- aldex.kw(ald.bact, useMC = TRUE, verbose = FALSE) # this takes a while 
+write.c
+```
+
+#### bonus
+How much of the reads are from core members?
+```{r}
+sum(colSums(bact.core.ps@otu_table[,1:606])) / sum(colSums(bact.core.ps@otu_table)) * 100
+sum(colSums(euks.core.ps@otu_table[,1:74])) / sum(colSums(euks.core.ps@otu_table)) * 100
+```
+
+
+#### session info
+```{r}
+sessionInfo()
+```
