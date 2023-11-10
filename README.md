@@ -4,12 +4,10 @@ Authors: Scott A. Klasek, James E. Crants, Touqeer Abbas, Katherine Ashley, Mari
 
 This work is part of the [Potato Soil Health Project](https://potatosoilhealth.cfans.umn.edu/), administered by the University of Minnesota and funded by the USDA National Institute of Food and Agriculture [Specialty Crops Research Initiative (SCRI)](https://www.nifa.usda.gov/grants/funding-opportunities/specialty-crop-research-initiative).   
  
-The manuscript associated with this archived repository [is published in Phytobiomes](DOI HERE).
+The manuscript associated with this archived repository [is published in Phytobiomes](https://doi.org/10.1094/PBIOMES-07-23-0060-R).
 
 **Data Availability:**    
 Raw 16S and ITS amplicon sequence reads associated with this study are publicly available as [NCBI BioProject PRJNA992073](https://www.ncbi.nlm.nih.gov/bioproject/PRJNA992073).  
-
-Additional soil physicochemical data and amplicon sequence data processed into phyloseq objects are available [here](LINK TO E-XTRA). 
 
 **Reproducible Workflow:**     
 Code associated with this study is available at [this repository](https://github.com/sklasek/potato_soil_patterns/tree/main/markdowns).  
